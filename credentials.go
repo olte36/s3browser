@@ -31,7 +31,7 @@ func newCredentialConfig(ctx context.Context, mode, accessKey, secretKey, sessio
 			creds: credentials.NewStaticV4(accessKey, secretKey, sessionToken),
 		}, nil
 	case "aws":
-		return credentialConfig{creds: newAWSCredentialChain()}, nil
+		return credentialConfig{creds: newAWSCredentialChain(ctx)}, nil
 	case "gcp":
 		transport, err := newGoogleCloudTransport(ctx, http.DefaultTransport)
 		if err != nil {
@@ -58,19 +58,20 @@ func resolveCredentialMode(mode, accessKey, secretKey string) string {
 }
 
 type awsCredentialProvider struct {
+	ctx     context.Context
 	expires time.Time
 }
 
-func newAWSCredentialChain() *credentials.Credentials {
-	return credentials.New(&awsCredentialProvider{})
+func newAWSCredentialChain(ctx context.Context) *credentials.Credentials {
+	return credentials.New(&awsCredentialProvider{ctx: ctx})
 }
 
 func (p *awsCredentialProvider) Retrieve() (credentials.Value, error) {
-	return p.retrieve(context.Background())
+	return p.retrieve(p.ctx)
 }
 
 func (p *awsCredentialProvider) RetrieveWithCredContext(*credentials.CredContext) (credentials.Value, error) {
-	return p.retrieve(context.Background())
+	return p.retrieve(p.ctx)
 }
 
 func (p *awsCredentialProvider) retrieve(ctx context.Context) (credentials.Value, error) {

@@ -11,11 +11,13 @@ const defaultGCSURL = "https://storage.googleapis.com"
 
 type endpointConfig struct {
 	Raw      string
+	Display  string
 	Endpoint string
 	Secure   bool
 }
 
 func parseEndpoint(raw string) (endpointConfig, error) {
+	display := storageDisplayName(raw)
 	if strings.TrimSpace(raw) == "" {
 		raw = defaultS3URL
 	}
@@ -45,9 +47,21 @@ func parseEndpoint(raw string) (endpointConfig, error) {
 
 	return endpointConfig{
 		Raw:      raw,
+		Display:  display,
 		Endpoint: u.Host,
 		Secure:   u.Scheme == "https",
 	}, nil
+}
+
+func storageDisplayName(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "aws":
+		return "AWS"
+	case "gcp":
+		return "GCP"
+	default:
+		return strings.TrimSpace(raw)
+	}
 }
 
 func resolveEndpointAlias(raw string) string {

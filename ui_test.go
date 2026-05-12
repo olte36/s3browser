@@ -38,7 +38,7 @@ func (f fakeService) InspectObject(context.Context, string, string, int64) (obje
 }
 
 func TestModelNavigation(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(bucketsLoadedMsg{buckets: []bucketItem{{Name: "alpha"}}})
 	m = modelAfter.(model)
 
@@ -85,7 +85,7 @@ func TestModelNavigation(t *testing.T) {
 }
 
 func TestModelRendersErrors(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(bucketsLoadedMsg{err: errors.New("no credentials")})
 	m = modelAfter.(model)
 	if !strings.Contains(m.View(), "no credentials") {
@@ -94,7 +94,7 @@ func TestModelRendersErrors(t *testing.T) {
 }
 
 func TestModelCursorWrapsAroundBucketsAndObjects(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(bucketsLoadedMsg{buckets: []bucketItem{{Name: "a"}, {Name: "b"}, {Name: "c"}}})
 	m = modelAfter.(model)
 
@@ -133,7 +133,7 @@ func TestModelCursorWrapsAroundBucketsAndObjects(t *testing.T) {
 }
 
 func TestBucketListScrollsToSelectedBucket(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	m.height = 12
 	buckets := make([]bucketItem, 15)
 	for i := range buckets {
@@ -157,7 +157,7 @@ func TestBucketListScrollsToSelectedBucket(t *testing.T) {
 }
 
 func TestObjectListScrollsToSelectedObject(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	m.height = 12
 	objects := make([]objectItem, 15)
 	for i := range objects {
@@ -181,7 +181,7 @@ func TestObjectListScrollsToSelectedObject(t *testing.T) {
 }
 
 func TestBucketRowsRenderTimestampBeforeName(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(bucketsLoadedMsg{buckets: []bucketItem{{
 		Name:         "archive",
 		CreationDate: time.Date(2026, 5, 12, 9, 10, 11, 0, time.UTC),
@@ -197,7 +197,7 @@ func TestBucketRowsRenderTimestampBeforeName(t *testing.T) {
 }
 
 func TestObjectRowsRenderTimestampAndSizeBeforeName(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
 		bucket: "archive",
 		objects: []objectItem{{
@@ -220,7 +220,7 @@ func TestObjectRowsRenderTimestampAndSizeBeforeName(t *testing.T) {
 }
 
 func TestPrefixRowsRenderPrefixInTimestampColumn(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
 		bucket: "archive",
 		objects: []objectItem{{
@@ -242,8 +242,29 @@ func TestPrefixRowsRenderPrefixInTimestampColumn(t *testing.T) {
 	}
 }
 
+func TestObjectsHeaderShowsStorageAndURIOnSeparateLines(t *testing.T) {
+	m := newModel(context.Background(), "AWS", fakeService{})
+	modelAfter, _ := m.Update(objectsLoadedMsg{
+		bucket:  "archive",
+		objects: []objectItem{{Key: "reports/may.csv"}},
+	})
+	m = modelAfter.(model)
+
+	header := plainTerminalText(m.header())
+	if !strings.Contains(header, "AWS\nURI: s3://archive") {
+		t.Fatalf("header should render storage and URI on separate lines: %q", header)
+	}
+
+	modelAfter, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = modelAfter.(model)
+	header = plainTerminalText(m.header())
+	if !strings.Contains(header, "AWS\nURI: s3://archive/reports/") {
+		t.Fatalf("header should render prefix URI on separate line: %q", header)
+	}
+}
+
 func TestModelDetailScrollClampsAtEnd(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	m.mode = viewDetail
 	m.height = 12
 	m.detail = objectDetail{
@@ -262,28 +283,98 @@ func TestModelDetailScrollClampsAtEnd(t *testing.T) {
 }
 
 func TestDetailHeaderHighlightsObjectPath(t *testing.T) {
-	m := newModel(fakeService{})
+	m := newModel(context.Background(), "AWS", fakeService{})
 	m.mode = viewDetail
 	m.activeBucket = "bucket"
 	m.detail = objectDetail{Object: objectItem{Key: "path/object.txt"}}
 
 	header := m.header()
-	if !strings.Contains(header, "bucket/path/object.txt") {
+	if !strings.Contains(header, "AWS") || !strings.Contains(header, "s3://bucket/path/object.txt") {
 		t.Fatalf("header missing object path: %q", header)
+	}
+	if !strings.Contains(header, "\n") {
+		t.Fatalf("header should render URI on a new line: %q", header)
 	}
 }
 
 func TestObjectDetailLinesRenderMetadataForBinaryPreview(t *testing.T) {
-	lines := strings.Join(objectDetailLines(objectDetail{
+	lines := strings.Join(objectDetailLines("bucket", objectDetail{
 		Object:   objectItem{Key: "archive/data.bin", Size: 4},
 		Metadata: map[string]string{"x-amz-meta-owner": "ops"},
 		Preview:  "00000000  00 01 ff 10                                      |....|\n",
 		Binary:   true,
 	}), "\n")
 
-	for _, want := range []string{"archive/data.bin", "Metadata:", "x-amz-meta-owner", "ops", "Preview:", "binary object; showing hex preview", "00000000"} {
+	for _, want := range []string{"Metadata:", "x-amz-meta-owner", "ops", "Preview:", "binary object; showing hex preview", "00000000"} {
 		if !strings.Contains(lines, want) {
 			t.Fatalf("detail lines missing %q:\n%s", want, lines)
 		}
+	}
+	for _, unwanted := range []string{"URI:", "s3://bucket/archive/data.bin", "Key:", "archive/data.bin"} {
+		if strings.Contains(lines, unwanted) {
+			t.Fatalf("detail lines should not duplicate object URI/key %q:\n%s", unwanted, lines)
+		}
+	}
+}
+
+func TestObjectListCopyKeyReturnsCopyCommand(t *testing.T) {
+	m := newModel(context.Background(), "AWS", fakeService{})
+	modelAfter, _ := m.Update(objectsLoadedMsg{
+		bucket:  "archive",
+		objects: []objectItem{{Key: "reports/may.csv"}},
+	})
+	m = modelAfter.(model)
+
+	modelAfter, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m = modelAfter.(model)
+	if cmd == nil {
+		t.Fatal("expected copy command")
+	}
+
+	modelAfter, _ = m.Update(copiedMsg{label: "URI"})
+	m = modelAfter.(model)
+	if !strings.Contains(m.View(), "Copied URI") {
+		t.Fatalf("view missing copy status:\n%s", m.View())
+	}
+
+	modelAfter, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = modelAfter.(model)
+	modelAfter, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if cmd == nil {
+		t.Fatal("expected prefix copy command")
+	}
+}
+
+func TestDetailCopyKeysReturnCopyCommands(t *testing.T) {
+	m := newModel(context.Background(), "AWS", fakeService{})
+	m.mode = viewDetail
+	m.activeBucket = "bucket"
+	m.detail = objectDetail{
+		Object:   objectItem{Key: "path/object.txt"},
+		Metadata: map[string]string{"owner": "ops"},
+		Preview:  "hello",
+	}
+
+	for _, key := range []rune{'c', 'm', 'p'} {
+		modelAfter, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		m = modelAfter.(model)
+		if cmd == nil {
+			t.Fatalf("expected copy command for %q", key)
+		}
+	}
+
+	modelAfter, cmd := m.Update(copiedMsg{label: "URI"})
+	m = modelAfter.(model)
+	if cmd == nil {
+		t.Fatal("expected status clear command")
+	}
+	if !strings.Contains(m.View(), "Copied URI") {
+		t.Fatalf("view missing copy status:\n%s", m.View())
+	}
+
+	modelAfter, _ = m.Update(clearStatusMsg{id: m.statusID})
+	m = modelAfter.(model)
+	if strings.Contains(m.View(), "Copied URI") {
+		t.Fatalf("copy status should be cleared:\n%s", m.View())
 	}
 }

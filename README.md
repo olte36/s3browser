@@ -74,6 +74,15 @@ For local MinIO over HTTP:
 go run . -storage http://localhost:9000 -creds raw -access-key minioadmin -secret-key minioadmin
 ```
 
+Run against the public MinIO playground:
+
+```bash
+go run . -storage https://play.min.io -access-key Q3AM3UQ867SPQQA43P2F -secret-key zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG
+```
+
+The playground endpoint and credentials come from the MinIO client configuration
+in https://github.com/minio/mc/blob/master/cmd/config-v10.go.
+
 Custom endpoints use path-style bucket lookup, which works well with MinIO and
 many S3-compatible services.
 

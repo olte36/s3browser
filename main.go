@@ -2,14 +2,27 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	storageFlag := flag.String("storage", "", "S3-compatible storage URL or alias: aws, gcp")
 	credsFlag := flag.String("creds", "raw", "credential source: raw, aws, or gcp")
 	accessKeyFlag := flag.String("access-key", "", "access key for -creds raw")
@@ -19,25 +32,25 @@ func main() {
 
 	endpoint, err := parseEndpoint(*storageFlag)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		return err
 	}
 
-	auth, err := newCredentialConfig(context.Background(), *credsFlag, *accessKeyFlag, *secretKeyFlag, *sessionTokenFlag)
+	auth, err := newCredentialConfig(ctx, *credsFlag, *accessKeyFlag, *secretKeyFlag, *sessionTokenFlag)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		return err
 	}
 
 	service, err := newMinioService(endpoint, auth)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
 
-	program := tea.NewProgram(newModel(service), tea.WithAltScreen())
+	program := tea.NewProgram(newModel(ctx, endpoint.Display, service), tea.WithAltScreen(), tea.WithContext(ctx))
 	if _, err := program.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
+			return nil
+		}
+		return err
 	}
+	return nil
 }

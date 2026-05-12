@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	osc52 "github.com/aymanbagabas/go-osc52/v2"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -31,11 +33,15 @@ const (
 )
 
 type model struct {
+	ctx     context.Context
+	storage string
 	service s3Service
 
-	mode    viewMode
-	loading bool
-	err     error
+	mode     viewMode
+	loading  bool
+	err      error
+	status   string
+	statusID int
 
 	width  int
 	height int
@@ -72,8 +78,17 @@ type detailLoadedMsg struct {
 	err    error
 }
 
-func newModel(service s3Service) model {
-	return model{service: service, mode: viewBuckets, loading: true}
+type copiedMsg struct {
+	label string
+	err   error
+}
+
+type clearStatusMsg struct {
+	id int
+}
+
+func newModel(ctx context.Context, storage string, service s3Service) model {
+	return model{ctx: ctx, storage: storage, service: service, mode: viewBuckets, loading: true}
 }
 
 func (m model) Init() tea.Cmd {
@@ -88,15 +103,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case copiedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.status = ""
+			return m, nil
+		}
+		m.err = nil
+		m.statusID++
+		m.status = "Copied " + msg.label
+		return m, clearStatusAfter(m.statusID)
+	case clearStatusMsg:
+		if msg.id == m.statusID {
+			m.status = ""
+		}
 	case bucketsLoadedMsg:
 		m.loading = false
 		m.err = msg.err
+		m.status = ""
 		m.buckets = msg.buckets
 		m.bucketCursor = clampCursor(m.bucketCursor, len(m.buckets))
 		m.bucketScroll = clampListScroll(m.bucketScroll, m.bucketCursor, len(m.buckets), visibleHeight(m.height))
 	case objectsLoadedMsg:
 		m.loading = false
 		m.err = msg.err
+		m.status = ""
 		if msg.err == nil {
 			m.mode = viewObjects
 			m.activeBucket = msg.bucket
@@ -110,6 +141,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case detailLoadedMsg:
 		m.loading = false
 		m.err = msg.err
+		m.status = ""
 		if msg.err == nil {
 			m.mode = viewDetail
 			m.detail = msg.detail
@@ -126,6 +158,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.loading = true
 		m.err = nil
+		m.status = ""
 		switch m.mode {
 		case viewBuckets:
 			return m, m.loadBuckets()
@@ -144,6 +177,21 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveCursor(10)
 	case "enter":
 		return m.activateSelection()
+	case "c":
+		switch m.mode {
+		case viewObjects:
+			return m, copyText("URI", s3URI(m.activeBucket, currentObjectPath(m.current)))
+		case viewDetail:
+			return m, copyText("URI", s3URI(m.activeBucket, m.detail.Object.Key))
+		}
+	case "m":
+		if m.mode == viewDetail {
+			return m, copyText("metadata", metadataText(m.detail.Metadata))
+		}
+	case "p":
+		if m.mode == viewDetail {
+			return m, copyText("preview", m.detail.Preview)
+		}
 	case "backspace", "esc", "left", "h":
 		return m.goBack()
 	}
@@ -168,6 +216,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 	if m.loading {
 		return m, nil
 	}
+	m.status = ""
 	switch m.mode {
 	case viewBuckets:
 		if len(m.buckets) == 0 {
@@ -198,6 +247,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 }
 
 func (m model) goBack() (tea.Model, tea.Cmd) {
+	m.status = ""
 	switch m.mode {
 	case viewDetail:
 		m.mode = viewObjects
@@ -226,6 +276,9 @@ func (m model) View() string {
 	if m.err != nil {
 		b.WriteString("Error: " + m.err.Error() + "\n\n")
 	}
+	if m.status != "" {
+		b.WriteString(m.status + "\n\n")
+	}
 
 	switch m.mode {
 	case viewBuckets:
@@ -236,20 +289,32 @@ func (m model) View() string {
 		b.WriteString(m.viewDetail())
 	}
 	b.WriteString("\n")
-	b.WriteString("enter open/view  backspace back  r reload  q quit")
+	b.WriteString(m.footer())
 	return b.String()
 }
 
 func (m model) header() string {
+	prefix := "S3 Objects Browser - " + m.storage
 	switch m.mode {
 	case viewBuckets:
-		return "S3 Objects Browser - buckets"
+		return prefix + " - buckets"
 	case viewObjects:
-		return fmt.Sprintf("S3 Objects Browser - %s:%s", m.activeBucket, currentPath(m.current))
+		return prefix + "\nURI: " + headerPathStyle.Render(s3URI(m.activeBucket, currentObjectPath(m.current)))
 	case viewDetail:
-		return "S3 Objects Browser - " + headerPathStyle.Render(fmt.Sprintf("%s/%s", m.activeBucket, m.detail.Object.Key))
+		return prefix + "\nURI: " + headerPathStyle.Render(s3URI(m.activeBucket, m.detail.Object.Key))
 	default:
-		return "S3 Objects Browser"
+		return prefix
+	}
+}
+
+func (m model) footer() string {
+	switch m.mode {
+	case viewObjects:
+		return "enter open/view  c copy uri  backspace back  r reload  q quit"
+	case viewDetail:
+		return "c copy uri  m copy metadata  p copy preview  backspace back  r reload  q quit"
+	default:
+		return "enter open/view  backspace back  r reload  q quit"
 	}
 }
 
@@ -289,7 +354,7 @@ func (m model) viewObjects() string {
 		if i == m.objectCursor {
 			cursor = ">"
 		}
-		b.WriteString(fmt.Sprintf("%s %s %s %s\n", cursor, styledObjectTimestamp(entry.Node), styledObjectSize(entry.Node), entry.Label))
+		b.WriteString(fmt.Sprintf("%s %s %s %s\n", cursor, styledObjectTimestamp(entry.Node), styledObjectSize(entry.Node), objectEntryLabel(entry)))
 	}
 	return b.String()
 }
@@ -331,16 +396,15 @@ func blankObjectSize() string {
 }
 
 func (m model) viewDetail() string {
-	lines := objectDetailLines(m.detail)
+	lines := objectDetailLines(m.activeBucket, m.detail)
 	m.detailScroll = clamp(m.detailScroll, 0, m.maxDetailScroll())
 	visible := visibleHeight(m.height)
 	end := min(len(lines), m.detailScroll+visible)
 	return strings.Join(lines[m.detailScroll:end], "\n") + "\n"
 }
 
-func objectDetailLines(detail objectDetail) []string {
+func objectDetailLines(bucket string, detail objectDetail) []string {
 	lines := []string{
-		"Key: " + objectPathStyle.Render(detail.Object.Key),
 		"Size: " + formatBytes(detail.Object.Size),
 	}
 	if detail.Object.ContentType != "" {
@@ -378,9 +442,56 @@ func objectDetailLines(detail objectDetail) []string {
 	return lines
 }
 
+func s3URI(bucket, key string) string {
+	if key == "" {
+		return "s3://" + bucket
+	}
+	return "s3://" + bucket + "/" + strings.TrimPrefix(key, "/")
+}
+
+func objectEntryLabel(entry navEntry) string {
+	return entry.Label
+}
+
+func currentObjectPath(node *treeNode) string {
+	if node == nil {
+		return ""
+	}
+	return node.Path
+}
+
+func metadataText(metadata map[string]string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, key+": "+metadata[key])
+	}
+	return strings.Join(lines, "\n")
+}
+
+func copyText(label, text string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := fmt.Fprint(os.Stdout, osc52.New(text).String())
+		return copiedMsg{label: label, err: err}
+	}
+}
+
+func clearStatusAfter(id int) tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+		return clearStatusMsg{id: id}
+	})
+}
+
 func (m model) loadBuckets() tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
 		defer cancel()
 		buckets, err := m.service.ListBuckets(ctx)
 		return bucketsLoadedMsg{buckets: buckets, err: err}
@@ -389,7 +500,7 @@ func (m model) loadBuckets() tea.Cmd {
 
 func (m model) loadObjects(bucket string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
 		defer cancel()
 		objects, err := m.service.ListObjects(ctx, bucket)
 		return objectsLoadedMsg{bucket: bucket, objects: objects, err: err}
@@ -398,7 +509,7 @@ func (m model) loadObjects(bucket string) tea.Cmd {
 
 func (m model) loadDetail(bucket, key string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
 		defer cancel()
 		detail, err := m.service.InspectObject(ctx, bucket, key, previewBytes)
 		return detailLoadedMsg{detail: detail, err: err}
@@ -427,7 +538,7 @@ func visibleHeight(height int) int {
 }
 
 func (m model) maxDetailScroll() int {
-	return max(0, len(objectDetailLines(m.detail))-visibleHeight(m.height))
+	return max(0, len(objectDetailLines(m.activeBucket, m.detail))-visibleHeight(m.height))
 }
 
 func wrapCursor(cursor, delta, count int) int {
