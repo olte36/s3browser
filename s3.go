@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 const previewBytes = 256 * 1024
@@ -49,10 +48,11 @@ type minioService struct {
 	client *minio.Client
 }
 
-func newMinioService(cfg endpointConfig, creds *credentials.Credentials) (*minioService, error) {
+func newMinioService(cfg endpointConfig, auth credentialConfig) (*minioService, error) {
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:        creds,
+		Creds:        auth.creds,
 		Secure:       cfg.Secure,
+		Transport:    auth.transport,
 		BucketLookup: minio.BucketLookupPath,
 	})
 	if err != nil {

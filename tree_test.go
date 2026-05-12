@@ -12,7 +12,7 @@ func TestBuildObjectTree(t *testing.T) {
 
 	root := buildObjectTree(objects)
 	entries := listChildren(root)
-	want := []string{"images/", "logs/", "root.txt  10 B"}
+	want := []string{"images/", "logs/", "root.txt"}
 	if len(entries) != len(want) {
 		t.Fatalf("got %d entries, want %d", len(entries), len(want))
 	}
@@ -48,7 +48,7 @@ func TestBuildObjectTreeDirectoryPlaceholder(t *testing.T) {
 	if folder.Kind != nodeFolder {
 		t.Fatalf("folder kind = %v, want folder", folder.Kind)
 	}
-	if got := listChildren(folder); len(got) != 1 || got[0].Label != "file.txt  1 B" {
+	if got := listChildren(folder); len(got) != 1 || got[0].Label != "file.txt" {
 		t.Fatalf("unexpected folder children: %#v", got)
 	}
 }
@@ -62,7 +62,7 @@ func TestBuildObjectTreeObjectPrefixCollision(t *testing.T) {
 	if dir.Kind != nodeFolder {
 		t.Fatalf("dir kind = %v, want folder", dir.Kind)
 	}
-	if got := listChildren(dir); len(got) != 1 || got[0].Label != "file.txt  2 B" {
+	if got := listChildren(dir); len(got) != 1 || got[0].Label != "file.txt" {
 		t.Fatalf("unexpected dir children: %#v", got)
 	}
 }

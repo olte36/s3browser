@@ -3,11 +3,20 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func plainTerminalText(value string) string {
+	return ansiEscapePattern.ReplaceAllString(value, "")
+}
 
 type fakeService struct {
 	buckets []bucketItem
@@ -120,6 +129,116 @@ func TestModelCursorWrapsAroundBucketsAndObjects(t *testing.T) {
 	m = modelAfter.(model)
 	if m.objectCursor != 0 {
 		t.Fatalf("object cursor = %d, want 0", m.objectCursor)
+	}
+}
+
+func TestBucketListScrollsToSelectedBucket(t *testing.T) {
+	m := newModel(fakeService{})
+	m.height = 12
+	buckets := make([]bucketItem, 15)
+	for i := range buckets {
+		buckets[i] = bucketItem{Name: fmt.Sprintf("bucket-%02d", i)}
+	}
+	modelAfter, _ := m.Update(bucketsLoadedMsg{buckets: buckets})
+	m = modelAfter.(model)
+
+	for range 12 {
+		modelAfter, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = modelAfter.(model)
+	}
+
+	view := plainTerminalText(m.viewBuckets())
+	if !strings.Contains(view, "bucket-12") {
+		t.Fatalf("selected bucket is not visible:\n%s", view)
+	}
+	if strings.Contains(view, "bucket-00") {
+		t.Fatalf("bucket list did not scroll:\n%s", view)
+	}
+}
+
+func TestObjectListScrollsToSelectedObject(t *testing.T) {
+	m := newModel(fakeService{})
+	m.height = 12
+	objects := make([]objectItem, 15)
+	for i := range objects {
+		objects[i] = objectItem{Key: fmt.Sprintf("object-%02d.txt", i)}
+	}
+	modelAfter, _ := m.Update(objectsLoadedMsg{bucket: "a", objects: objects})
+	m = modelAfter.(model)
+
+	for range 12 {
+		modelAfter, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = modelAfter.(model)
+	}
+
+	view := plainTerminalText(m.viewObjects())
+	if !strings.Contains(view, "object-12.txt") {
+		t.Fatalf("selected object is not visible:\n%s", view)
+	}
+	if strings.Contains(view, "object-00.txt") {
+		t.Fatalf("object list did not scroll:\n%s", view)
+	}
+}
+
+func TestBucketRowsRenderTimestampBeforeName(t *testing.T) {
+	m := newModel(fakeService{})
+	modelAfter, _ := m.Update(bucketsLoadedMsg{buckets: []bucketItem{{
+		Name:         "archive",
+		CreationDate: time.Date(2026, 5, 12, 9, 10, 11, 0, time.UTC),
+	}}})
+	m = modelAfter.(model)
+
+	line := strings.TrimSpace(plainTerminalText(m.viewBuckets()))
+	timestampIndex := strings.Index(line, "2026-05-12 09:10:11")
+	nameIndex := strings.Index(line, "archive")
+	if timestampIndex < 0 || nameIndex < 0 || timestampIndex > nameIndex {
+		t.Fatalf("bucket row should render timestamp before name: %q", line)
+	}
+}
+
+func TestObjectRowsRenderTimestampAndSizeBeforeName(t *testing.T) {
+	m := newModel(fakeService{})
+	modelAfter, _ := m.Update(objectsLoadedMsg{
+		bucket: "archive",
+		objects: []objectItem{{
+			Key:          "reports/may.csv",
+			Size:         1536,
+			LastModified: time.Date(2026, 5, 12, 9, 10, 11, 0, time.UTC),
+		}},
+	})
+	m = modelAfter.(model)
+	modelAfter, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = modelAfter.(model)
+
+	line := strings.TrimSpace(plainTerminalText(m.viewObjects()))
+	timestampIndex := strings.Index(line, "2026-05-12 09:10:11")
+	sizeIndex := strings.Index(line, "1.5 KiB")
+	nameIndex := strings.Index(line, "may.csv")
+	if timestampIndex < 0 || sizeIndex < 0 || nameIndex < 0 || !(timestampIndex < sizeIndex && sizeIndex < nameIndex) {
+		t.Fatalf("object row should render timestamp and size before name: %q", line)
+	}
+}
+
+func TestPrefixRowsRenderPrefixInTimestampColumn(t *testing.T) {
+	m := newModel(fakeService{})
+	modelAfter, _ := m.Update(objectsLoadedMsg{
+		bucket: "archive",
+		objects: []objectItem{{
+			Key:          "reports/may.csv",
+			Size:         1536,
+			LastModified: time.Date(2026, 5, 12, 9, 10, 11, 0, time.UTC),
+		}},
+	})
+	m = modelAfter.(model)
+
+	line := strings.TrimSpace(plainTerminalText(m.viewObjects()))
+	prefixIndex := strings.Index(line, "PREFIX")
+	nameIndex := strings.Index(line, "reports/")
+	if prefixIndex < 0 || nameIndex < 0 || prefixIndex > nameIndex {
+		t.Fatalf("prefix row should render PREFIX before name: %q", line)
+	}
+	if strings.Contains(line, "2026-05-12") || strings.Contains(line, "1.5 KiB") {
+		t.Fatalf("prefix row should not render object timestamp or size: %q", line)
 	}
 }
 

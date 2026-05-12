@@ -18,9 +18,10 @@ a bounded content preview.
 ## Requirements
 
 - Go 1.24.3 or newer.
-- S3-compatible credentials available through the AWS default credential chain.
+- Credentials from one of the supported CLI modes: raw keys, the AWS default
+  credential chain, or Google Cloud application default credentials.
 
-Credentials can come from common AWS sources such as:
+AWS credentials can come from common AWS sources such as:
 
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
@@ -33,23 +34,62 @@ Credentials can come from common AWS sources such as:
 Run against the default AWS S3 endpoint:
 
 ```bash
-go run .
+go run . -access-key ACCESS_KEY -secret-key SECRET_KEY
+```
+
+Raw credentials are the default, so this is equivalent to:
+
+```bash
+go run . -storage aws -creds raw -access-key ACCESS_KEY -secret-key SECRET_KEY
+```
+
+Run against AWS S3 using the AWS SDK default credential chain:
+
+```bash
+go run . -storage aws -creds aws
+```
+
+Run against Google Cloud Storage using Google Cloud application default
+credentials:
+
+```bash
+go run . -storage gcp -creds gcp
+```
+
+Run with raw S3 access keys:
+
+```bash
+go run . -access-key ACCESS_KEY -secret-key SECRET_KEY
 ```
 
 Run against a custom S3-compatible endpoint:
 
 ```bash
-go run . -url https://minio.example.com:9000
+go run . -storage https://minio.example.com:9000 -creds raw -access-key ACCESS_KEY -secret-key SECRET_KEY
 ```
 
 For local MinIO over HTTP:
 
 ```bash
-go run . -url http://localhost:9000
+go run . -storage http://localhost:9000 -creds raw -access-key minioadmin -secret-key minioadmin
 ```
 
 Custom endpoints use path-style bucket lookup, which works well with MinIO and
 many S3-compatible services.
+
+The `-storage` flag is empty by default and accepts either a storage URL or one of these aliases:
+
+- `aws`: `https://s3.amazonaws.com`
+- `gcp`: `https://storage.googleapis.com`
+
+The `-creds` flag accepts:
+
+- `raw`: requires `-access-key` and `-secret-key`; `-session-token` is optional.
+- `aws`: loads credentials through the AWS SDK default config.
+- `gcp`: loads Google Cloud application default credentials.
+
+If both `-access-key` and `-secret-key` are provided, raw credentials are used
+even when `-creds` is omitted.
 
 ## Controls
 

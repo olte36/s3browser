@@ -11,6 +11,8 @@ func TestParseEndpoint(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "default", endpoint: "s3.amazonaws.com", secure: true},
+		{name: "aws alias", raw: "aws", endpoint: "s3.amazonaws.com", secure: true},
+		{name: "gcp alias", raw: "gcp", endpoint: "storage.googleapis.com", secure: true},
 		{name: "https", raw: "https://minio.example.com:9000", endpoint: "minio.example.com:9000", secure: true},
 		{name: "http", raw: "http://localhost:9000", endpoint: "localhost:9000", secure: false},
 		{name: "host only defaults https", raw: "localhost:9000", endpoint: "localhost:9000", secure: true},

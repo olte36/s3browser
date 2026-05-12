@@ -96,8 +96,6 @@ func listChildren(node *treeNode) []navEntry {
 		label := child.Name
 		if child.Kind == nodeFolder {
 			label += "/"
-		} else if child.Object != nil {
-			label += "  " + formatBytes(child.Object.Size)
 		}
 		entries = append(entries, navEntry{Label: label, Node: child})
 	}

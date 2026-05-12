@@ -2,11 +2,60 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
+
+const googleCloudStorageReadOnlyScope = "https://www.googleapis.com/auth/devstorage.read_only"
+
+type credentialConfig struct {
+	creds     *credentials.Credentials
+	transport http.RoundTripper
+}
+
+func newCredentialConfig(ctx context.Context, mode, accessKey, secretKey, sessionToken string) (credentialConfig, error) {
+	mode = resolveCredentialMode(mode, accessKey, secretKey)
+	switch mode {
+	case "raw":
+		if accessKey == "" || secretKey == "" {
+			return credentialConfig{}, fmt.Errorf("-access-key and -secret-key are required when -creds raw")
+		}
+		return credentialConfig{
+			creds: credentials.NewStaticV4(accessKey, secretKey, sessionToken),
+		}, nil
+	case "aws":
+		return credentialConfig{creds: newAWSCredentialChain()}, nil
+	case "gcp":
+		transport, err := newGoogleCloudTransport(ctx, http.DefaultTransport)
+		if err != nil {
+			return credentialConfig{}, err
+		}
+		return credentialConfig{
+			creds:     credentials.NewStatic("", "", "", credentials.SignatureAnonymous),
+			transport: transport,
+		}, nil
+	default:
+		return credentialConfig{}, fmt.Errorf("-creds must be one of raw, aws, or gcp")
+	}
+}
+
+func resolveCredentialMode(mode, accessKey, secretKey string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return "raw"
+	}
+	if accessKey != "" && secretKey != "" && mode == "aws" {
+		return "raw"
+	}
+	return mode
+}
 
 type awsCredentialProvider struct {
 	expires time.Time
@@ -44,4 +93,39 @@ func (p *awsCredentialProvider) retrieve(ctx context.Context) (credentials.Value
 
 func (p *awsCredentialProvider) IsExpired() bool {
 	return !p.expires.IsZero() && time.Now().After(p.expires.Add(-time.Minute))
+}
+
+func newGoogleCloudTransport(ctx context.Context, base http.RoundTripper) (http.RoundTripper, error) {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	adc, err := google.FindDefaultCredentials(ctx, googleCloudStorageReadOnlyScope)
+	if err != nil {
+		return nil, fmt.Errorf("load Google Cloud default credentials: %w", err)
+	}
+	return &googleCloudTransport{
+		base:      base,
+		projectID: adc.ProjectID,
+		source:    adc.TokenSource,
+	}, nil
+}
+
+type googleCloudTransport struct {
+	base      http.RoundTripper
+	projectID string
+	source    oauth2.TokenSource
+}
+
+func (t *googleCloudTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	token, err := t.source.Token()
+	if err != nil {
+		return nil, err
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Header = req.Header.Clone()
+	token.SetAuthHeader(cloned)
+	if t.projectID != "" {
+		cloned.Header.Set("x-goog-project-id", t.projectID)
+	}
+	return t.base.RoundTrip(cloned)
 }

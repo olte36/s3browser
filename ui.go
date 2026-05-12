@@ -13,6 +13,8 @@ import (
 
 var (
 	objectPathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+	timestampStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	sizeStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	headerPathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Bold(true)
 	metadataTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
 	metadataKeyStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("177"))
@@ -40,6 +42,7 @@ type model struct {
 
 	buckets      []bucketItem
 	bucketCursor int
+	bucketScroll int
 	activeBucket string
 
 	objects      []objectItem
@@ -47,6 +50,7 @@ type model struct {
 	current      *treeNode
 	pathStack    []*treeNode
 	objectCursor int
+	objectScroll int
 
 	detail       objectDetail
 	detailScroll int
@@ -89,6 +93,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.buckets = msg.buckets
 		m.bucketCursor = clampCursor(m.bucketCursor, len(m.buckets))
+		m.bucketScroll = clampListScroll(m.bucketScroll, m.bucketCursor, len(m.buckets), visibleHeight(m.height))
 	case objectsLoadedMsg:
 		m.loading = false
 		m.err = msg.err
@@ -100,6 +105,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.current = m.root
 			m.pathStack = nil
 			m.objectCursor = 0
+			m.objectScroll = 0
 		}
 	case detailLoadedMsg:
 		m.loading = false
@@ -148,9 +154,11 @@ func (m *model) moveCursor(delta int) {
 	switch m.mode {
 	case viewBuckets:
 		m.bucketCursor = wrapCursor(m.bucketCursor, delta, len(m.buckets))
+		m.bucketScroll = clampListScroll(m.bucketScroll, m.bucketCursor, len(m.buckets), visibleHeight(m.height))
 	case viewObjects:
 		entries := listChildren(m.current)
 		m.objectCursor = wrapCursor(m.objectCursor, delta, len(entries))
+		m.objectScroll = clampListScroll(m.objectScroll, m.objectCursor, len(entries), visibleHeight(m.height))
 	case viewDetail:
 		m.detailScroll = clamp(m.detailScroll+delta, 0, m.maxDetailScroll())
 	}
@@ -179,6 +187,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 			m.pathStack = append(m.pathStack, m.current)
 			m.current = node
 			m.objectCursor = 0
+			m.objectScroll = 0
 			return m, nil
 		}
 		m.loading = true
@@ -198,6 +207,7 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 			m.current = m.pathStack[len(m.pathStack)-1]
 			m.pathStack = m.pathStack[:len(m.pathStack)-1]
 			m.objectCursor = 0
+			m.objectScroll = 0
 		} else {
 			m.mode = viewBuckets
 			m.err = nil
@@ -243,21 +253,23 @@ func (m model) header() string {
 	}
 }
 
+const listTimestampLayout = "2006-01-02 15:04:05"
+
 func (m model) viewBuckets() string {
 	if len(m.buckets) == 0 && !m.loading {
 		return "No buckets found.\n"
 	}
 	var b strings.Builder
-	for i, bucket := range m.buckets {
+	visible := visibleHeight(m.height)
+	scroll := clampListScroll(m.bucketScroll, m.bucketCursor, len(m.buckets), visible)
+	end := min(len(m.buckets), scroll+visible)
+	for i := scroll; i < end; i++ {
+		bucket := m.buckets[i]
 		cursor := " "
 		if i == m.bucketCursor {
 			cursor = ">"
 		}
-		created := ""
-		if !bucket.CreationDate.IsZero() {
-			created = "  " + bucket.CreationDate.Format(time.RFC3339)
-		}
-		b.WriteString(fmt.Sprintf("%s %s%s\n", cursor, bucket.Name, created))
+		b.WriteString(fmt.Sprintf("%s %s %s\n", cursor, styledListTimestamp(bucket.CreationDate), bucket.Name))
 	}
 	return b.String()
 }
@@ -268,14 +280,54 @@ func (m model) viewObjects() string {
 		return "No objects found.\n"
 	}
 	var b strings.Builder
-	for i, entry := range entries {
+	visible := visibleHeight(m.height)
+	scroll := clampListScroll(m.objectScroll, m.objectCursor, len(entries), visible)
+	end := min(len(entries), scroll+visible)
+	for i := scroll; i < end; i++ {
+		entry := entries[i]
 		cursor := " "
 		if i == m.objectCursor {
 			cursor = ">"
 		}
-		b.WriteString(fmt.Sprintf("%s %s\n", cursor, entry.Label))
+		b.WriteString(fmt.Sprintf("%s %s %s %s\n", cursor, styledObjectTimestamp(entry.Node), styledObjectSize(entry.Node), entry.Label))
 	}
 	return b.String()
+}
+
+func styledListTimestamp(value time.Time) string {
+	return timestampStyle.Render(formatListTimestamp(value))
+}
+
+func styledObjectTimestamp(node *treeNode) string {
+	if node != nil && node.Kind == nodeFolder {
+		return timestampStyle.Render(fmt.Sprintf("%-*s", len(listTimestampLayout), "PREFIX"))
+	}
+	if node == nil || node.Object == nil {
+		return timestampStyle.Render(blankTimestamp())
+	}
+	return styledListTimestamp(node.Object.LastModified)
+}
+
+func styledObjectSize(node *treeNode) string {
+	if node == nil || node.Kind != nodeObject || node.Object == nil {
+		return sizeStyle.Render(blankObjectSize())
+	}
+	return sizeStyle.Render(fmt.Sprintf("%12s", formatBytes(node.Object.Size)))
+}
+
+func formatListTimestamp(value time.Time) string {
+	if value.IsZero() {
+		return blankTimestamp()
+	}
+	return value.Format(listTimestampLayout)
+}
+
+func blankTimestamp() string {
+	return strings.Repeat(" ", len(listTimestampLayout))
+}
+
+func blankObjectSize() string {
+	return strings.Repeat(" ", 12)
 }
 
 func (m model) viewDetail() string {
@@ -387,6 +439,24 @@ func wrapCursor(cursor, delta, count int) int {
 		next += count
 	}
 	return next
+}
+
+func clampListScroll(scroll, cursor, count, visible int) int {
+	if count == 0 {
+		return 0
+	}
+	if visible <= 0 {
+		visible = 1
+	}
+	maxScroll := max(0, count-visible)
+	scroll = clamp(scroll, 0, maxScroll)
+	if cursor < scroll {
+		return cursor
+	}
+	if cursor >= scroll+visible {
+		return clamp(cursor-visible+1, 0, maxScroll)
+	}
+	return scroll
 }
 
 func clamp(value, low, high int) int {

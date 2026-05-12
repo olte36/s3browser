@@ -7,6 +7,7 @@ import (
 )
 
 const defaultS3URL = "https://s3.amazonaws.com"
+const defaultGCSURL = "https://storage.googleapis.com"
 
 type endpointConfig struct {
 	Raw      string
@@ -18,6 +19,7 @@ func parseEndpoint(raw string) (endpointConfig, error) {
 	if strings.TrimSpace(raw) == "" {
 		raw = defaultS3URL
 	}
+	raw = resolveEndpointAlias(raw)
 
 	parseRaw := raw
 	if !strings.Contains(parseRaw, "://") {
@@ -46,4 +48,15 @@ func parseEndpoint(raw string) (endpointConfig, error) {
 		Endpoint: u.Host,
 		Secure:   u.Scheme == "https",
 	}, nil
+}
+
+func resolveEndpointAlias(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "aws":
+		return defaultS3URL
+	case "gcp":
+		return defaultGCSURL
+	default:
+		return raw
+	}
 }
