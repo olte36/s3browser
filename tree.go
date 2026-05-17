@@ -42,7 +42,7 @@ func buildObjectTree(objects []objectItem) *treeNode {
 				current.Children = map[string]*treeNode{}
 			}
 			isLeaf := idx == len(parts)-1
-			if isLeaf && strings.HasSuffix(objects[i].Key, "/") {
+			if isLeaf && (objects[i].IsPrefix || strings.HasSuffix(objects[i].Key, "/")) {
 				isLeaf = false
 			}
 			child, ok := current.Children[part]

@@ -1,4 +1,4 @@
-module github.com/olte36/s3-objects-browser
+module github.com/olte36/s3browser
 
 go 1.24.3
 

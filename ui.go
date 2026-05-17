@@ -51,7 +51,8 @@ type model struct {
 	bucketScroll int
 	activeBucket string
 
-	objects      []objectItem
+	objectCache  map[string]objectItem
+	loadedPrefix map[string]bool
 	root         *treeNode
 	current      *treeNode
 	pathStack    []*treeNode
@@ -69,6 +70,7 @@ type bucketsLoadedMsg struct {
 
 type objectsLoadedMsg struct {
 	bucket  string
+	prefix  string
 	objects []objectItem
 	err     error
 }
@@ -88,7 +90,15 @@ type clearStatusMsg struct {
 }
 
 func newModel(ctx context.Context, storage string, service s3Service) model {
-	return model{ctx: ctx, storage: storage, service: service, mode: viewBuckets, loading: true}
+	return model{
+		ctx:          ctx,
+		storage:      storage,
+		service:      service,
+		mode:         viewBuckets,
+		loading:      true,
+		objectCache:  map[string]objectItem{},
+		loadedPrefix: map[string]bool{},
+	}
 }
 
 func (m model) Init() tea.Cmd {
@@ -129,12 +139,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.status = ""
 		if msg.err == nil {
+			oldBucket := m.activeBucket
 			m.mode = viewObjects
 			m.activeBucket = msg.bucket
-			m.objects = msg.objects
-			m.root = buildObjectTree(msg.objects)
-			m.current = m.root
-			m.pathStack = nil
+			if m.objectCache == nil || oldBucket != msg.bucket {
+				m.objectCache = map[string]objectItem{}
+			}
+			if m.loadedPrefix == nil || oldBucket != msg.bucket {
+				m.loadedPrefix = map[string]bool{}
+			}
+			m.mergeObjects(msg.prefix, msg.objects)
+			m.loadedPrefix[normalizePrefix(msg.prefix)] = true
+			m.rebuildObjectTree()
+			m.current = m.findNode(normalizePrefix(msg.prefix))
+			if m.current == nil {
+				m.current = m.root
+			}
+			m.pathStack = pathStackForPrefix(m.root, normalizePrefix(msg.prefix))
 			m.objectCursor = 0
 			m.objectScroll = 0
 		}
@@ -163,7 +184,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case viewBuckets:
 			return m, m.loadBuckets()
 		case viewObjects:
-			return m, m.loadObjects(m.activeBucket)
+			return m, m.loadObjects(m.activeBucket, currentObjectPath(m.current))
 		case viewDetail:
 			return m, m.loadDetail(m.activeBucket, m.detail.Object.Key)
 		}
@@ -225,7 +246,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		bucket := m.buckets[m.bucketCursor].Name
 		m.loading = true
 		m.err = nil
-		return m, m.loadObjects(bucket)
+		return m, m.loadObjects(bucket, "")
 	case viewObjects:
 		entries := listChildren(m.current)
 		if len(entries) == 0 {
@@ -233,6 +254,11 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		}
 		node := entries[m.objectCursor].Node
 		if node.Kind == nodeFolder {
+			if !m.loadedPrefix[normalizePrefix(node.Path)] {
+				m.loading = true
+				m.err = nil
+				return m, m.loadObjects(m.activeBucket, node.Path)
+			}
 			m.pathStack = append(m.pathStack, m.current)
 			m.current = node
 			m.objectCursor = 0
@@ -294,7 +320,7 @@ func (m model) View() string {
 }
 
 func (m model) header() string {
-	prefix := "S3 Objects Browser - " + m.storage
+	prefix := "s3browser - " + m.storage
 	switch m.mode {
 	case viewBuckets:
 		return prefix + " - buckets"
@@ -498,12 +524,12 @@ func (m model) loadBuckets() tea.Cmd {
 	}
 }
 
-func (m model) loadObjects(bucket string) tea.Cmd {
+func (m model) loadObjects(bucket, prefix string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
 		defer cancel()
-		objects, err := m.service.ListObjects(ctx, bucket)
-		return objectsLoadedMsg{bucket: bucket, objects: objects, err: err}
+		objects, err := m.service.ListObjects(ctx, bucket, prefix)
+		return objectsLoadedMsg{bucket: bucket, prefix: prefix, objects: objects, err: err}
 	}
 }
 
@@ -514,6 +540,100 @@ func (m model) loadDetail(bucket, key string) tea.Cmd {
 		detail, err := m.service.InspectObject(ctx, bucket, key, previewBytes)
 		return detailLoadedMsg{detail: detail, err: err}
 	}
+}
+
+func (m *model) mergeObjects(prefix string, objects []objectItem) {
+	if m.objectCache == nil {
+		m.objectCache = map[string]objectItem{}
+	}
+	prefix = normalizePrefix(prefix)
+	for key, object := range m.objectCache {
+		if isDirectChildKey(prefix, key, object.IsPrefix) {
+			delete(m.objectCache, key)
+		}
+	}
+	for _, object := range objects {
+		if object.Key == "" {
+			continue
+		}
+		m.objectCache[object.Key] = object
+	}
+}
+
+func (m *model) rebuildObjectTree() {
+	objects := make([]objectItem, 0, len(m.objectCache))
+	for _, object := range m.objectCache {
+		objects = append(objects, object)
+	}
+	m.root = buildObjectTree(objects)
+}
+
+func (m model) findNode(prefix string) *treeNode {
+	prefix = normalizePrefix(prefix)
+	if prefix == "" {
+		return m.root
+	}
+	if m.root == nil {
+		return nil
+	}
+	current := m.root
+	for _, part := range strings.Split(strings.Trim(prefix, "/"), "/") {
+		if part == "" || current.Children == nil {
+			continue
+		}
+		current = current.Children[part]
+		if current == nil {
+			return nil
+		}
+	}
+	return current
+}
+
+func pathStackForPrefix(root *treeNode, prefix string) []*treeNode {
+	prefix = normalizePrefix(prefix)
+	if root == nil || prefix == "" {
+		return nil
+	}
+	current := root
+	stack := []*treeNode{root}
+	parts := strings.Split(strings.Trim(prefix, "/"), "/")
+	for i, part := range parts {
+		if part == "" || current.Children == nil {
+			return stack[:0]
+		}
+		next := current.Children[part]
+		if next == nil {
+			return stack[:0]
+		}
+		if i < len(parts)-1 {
+			stack = append(stack, next)
+		}
+		current = next
+	}
+	return stack
+}
+
+func normalizePrefix(prefix string) string {
+	prefix = strings.TrimPrefix(prefix, "/")
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	return prefix
+}
+
+func isDirectChildKey(prefix, key string, isPrefix bool) bool {
+	key = strings.TrimPrefix(key, "/")
+	if !strings.HasPrefix(key, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(key, prefix)
+	if rest == "" {
+		return false
+	}
+	if isPrefix {
+		rest = strings.TrimSuffix(rest, "/")
+	}
+	return !strings.Contains(rest, "/")
 }
 
 func currentPath(node *treeNode) string {

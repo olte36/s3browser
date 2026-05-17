@@ -17,7 +17,7 @@ const previewBytes = 256 * 1024
 
 type s3Service interface {
 	ListBuckets(ctx context.Context) ([]bucketItem, error)
-	ListObjects(ctx context.Context, bucket string) ([]objectItem, error)
+	ListObjects(ctx context.Context, bucket, prefix string) ([]objectItem, error)
 	InspectObject(ctx context.Context, bucket, key string, limit int64) (objectDetail, error)
 }
 
@@ -33,6 +33,7 @@ type objectItem struct {
 	LastModified time.Time
 	ETag         string
 	ContentType  string
+	IsPrefix     bool
 }
 
 type objectDetail struct {
@@ -58,7 +59,7 @@ func newMinioService(cfg endpointConfig, auth credentialConfig) (*minioService, 
 	if err != nil {
 		return nil, err
 	}
-	client.SetAppInfo("s3-objects-browser", "0.1.0")
+	client.SetAppInfo("s3browser", "0.1.0")
 	return &minioService{client: client}, nil
 }
 
@@ -79,8 +80,11 @@ func (s *minioService) ListBuckets(ctx context.Context) ([]bucketItem, error) {
 	return items, nil
 }
 
-func (s *minioService) ListObjects(ctx context.Context, bucket string) ([]objectItem, error) {
-	objectCh := s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Recursive: true})
+func (s *minioService) ListObjects(ctx context.Context, bucket, prefix string) ([]objectItem, error) {
+	objectCh := s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+		Prefix:    strings.TrimPrefix(prefix, "/"),
+		Recursive: false,
+	})
 	var objects []objectItem
 	for obj := range objectCh {
 		if obj.Err != nil {
@@ -92,6 +96,7 @@ func (s *minioService) ListObjects(ctx context.Context, bucket string) ([]object
 			LastModified: obj.LastModified,
 			ETag:         obj.ETag,
 			ContentType:  obj.ContentType,
+			IsPrefix:     strings.HasSuffix(obj.Key, "/") && obj.Size == 0 && obj.ETag == "",
 		})
 	}
 	sort.Slice(objects, func(i, j int) bool { return objects[i].Key < objects[j].Key })

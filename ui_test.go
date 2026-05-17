@@ -29,7 +29,7 @@ func (f fakeService) ListBuckets(context.Context) ([]bucketItem, error) {
 	return f.buckets, f.err
 }
 
-func (f fakeService) ListObjects(context.Context, string) ([]objectItem, error) {
+func (f fakeService) ListObjects(context.Context, string, string) ([]objectItem, error) {
 	return f.objects, f.err
 }
 
@@ -51,7 +51,7 @@ func TestModelNavigation(t *testing.T) {
 	modelAfter, _ = m.Update(objectsLoadedMsg{
 		bucket: "alpha",
 		objects: []objectItem{
-			{Key: "dir/file.txt", Size: 3},
+			{Key: "dir/", IsPrefix: true},
 		},
 	})
 	m = modelAfter.(model)
@@ -59,7 +59,23 @@ func TestModelNavigation(t *testing.T) {
 		t.Fatalf("unexpected object state: mode=%v bucket=%q", m.mode, m.activeBucket)
 	}
 
-	modelAfter, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	modelAfter, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = modelAfter.(model)
+	if cmd == nil || !m.loading {
+		t.Fatal("expected prefix enter to start scoped object load")
+	}
+	lazyMsg := cmd().(objectsLoadedMsg)
+	if lazyMsg.bucket != "alpha" || lazyMsg.prefix != "dir/" {
+		t.Fatalf("lazy load requested bucket=%q prefix=%q, want alpha dir/", lazyMsg.bucket, lazyMsg.prefix)
+	}
+
+	modelAfter, _ = m.Update(objectsLoadedMsg{
+		bucket: "alpha",
+		prefix: "dir/",
+		objects: []objectItem{
+			{Key: "dir/file.txt", Size: 3},
+		},
+	})
 	m = modelAfter.(model)
 	if currentPath(m.current) != "/dir/" {
 		t.Fatalf("current path = %q, want /dir/", currentPath(m.current))
@@ -200,6 +216,7 @@ func TestObjectRowsRenderTimestampAndSizeBeforeName(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
 		bucket: "archive",
+		prefix: "reports/",
 		objects: []objectItem{{
 			Key:          "reports/may.csv",
 			Size:         1536,
@@ -223,10 +240,10 @@ func TestPrefixRowsRenderPrefixInTimestampColumn(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
 		bucket: "archive",
+		prefix: "",
 		objects: []objectItem{{
-			Key:          "reports/may.csv",
-			Size:         1536,
-			LastModified: time.Date(2026, 5, 12, 9, 10, 11, 0, time.UTC),
+			Key:      "reports/",
+			IsPrefix: true,
 		}},
 	})
 	m = modelAfter.(model)
@@ -256,6 +273,12 @@ func TestObjectsHeaderShowsStorageAndURIOnSeparateLines(t *testing.T) {
 	}
 
 	modelAfter, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = modelAfter.(model)
+	modelAfter, _ = m.Update(objectsLoadedMsg{
+		bucket:  "archive",
+		prefix:  "reports/",
+		objects: []objectItem{{Key: "reports/may.csv"}},
+	})
 	m = modelAfter.(model)
 	header = plainTerminalText(m.header())
 	if !strings.Contains(header, "AWS\nURI: s3://archive/reports/") {

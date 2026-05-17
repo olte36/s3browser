@@ -1,4 +1,4 @@
-# S3 Objects Browser
+# s3browser
 
 A terminal UI for browsing S3-compatible object storage.
 
@@ -31,53 +31,67 @@ AWS credentials can come from common AWS sources such as:
 
 ## Usage
 
+Install the app:
+
+```bash
+go install github.com/olte36/s3browser@latest
+```
+
+For local builds from this checkout:
+
+```bash
+make build
+```
+
+The compiled binary is written to `out/s3browser`.
+
 Run against the default AWS S3 endpoint:
 
 ```bash
-go run . -access-key ACCESS_KEY -secret-key SECRET_KEY
+s3browser -access-key ACCESS_KEY -secret-key SECRET_KEY
 ```
 
 Raw credentials are the default, so this is equivalent to:
 
 ```bash
-go run . -storage aws -creds raw -access-key ACCESS_KEY -secret-key SECRET_KEY
+s3browser -storage aws -creds raw -access-key ACCESS_KEY -secret-key SECRET_KEY
 ```
 
 Run against AWS S3 using the AWS SDK default credential chain:
 
 ```bash
-go run . -storage aws -creds aws
+s3browser -storage aws -creds aws
 ```
 
 Run against Google Cloud Storage using Google Cloud application default
 credentials:
 
 ```bash
-go run . -storage gcp -creds gcp
+s3browser -storage gcp -creds gcp
 ```
 
 Run with raw S3 access keys:
 
 ```bash
-go run . -access-key ACCESS_KEY -secret-key SECRET_KEY
+s3browser -access-key ACCESS_KEY -secret-key SECRET_KEY
 ```
 
 Run against a custom S3-compatible endpoint:
 
 ```bash
-go run . -storage https://minio.example.com:9000 -creds raw -access-key ACCESS_KEY -secret-key SECRET_KEY
+s3browser -storage https://minio.example.com:9000 -creds raw -access-key ACCESS_KEY -secret-key SECRET_KEY
 ```
 
 For local MinIO over HTTP:
 
 ```bash
-go run . -storage http://localhost:9000 -creds raw -access-key minioadmin -secret-key minioadmin
+s3browser -storage http://localhost:9000 -creds raw -access-key minioadmin -secret-key minioadmin
 ```
 
 Run against the public MinIO playground:
 
 ```bash
-go run . -storage https://play.min.io -access-key Q3AM3UQ867SPQQA43P2F -secret-key zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG
+s3browser -storage https://play.min.io -access-key Q3AM3UQ867SPQQA43P2F -secret-key zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG
 ```
 
 The playground endpoint and credentials come from the MinIO client configuration
