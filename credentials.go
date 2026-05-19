@@ -24,8 +24,10 @@ func newCredentialConfig(ctx context.Context, mode, accessKey, secretKey, sessio
 	mode = resolveCredentialMode(mode, accessKey, secretKey)
 	switch mode {
 	case "raw":
-		if accessKey == "" || secretKey == "" {
-			return credentialConfig{}, fmt.Errorf("-access-key and -secret-key are required when -creds raw")
+		if accessKey == "" && secretKey == "" && sessionToken == "" {
+			return credentialConfig{
+				creds: credentials.NewStatic("", "", "", credentials.SignatureAnonymous),
+			}, nil
 		}
 		return credentialConfig{
 			creds: credentials.NewStaticV4(accessKey, secretKey, sessionToken),

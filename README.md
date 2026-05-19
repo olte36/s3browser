@@ -107,7 +107,7 @@ The `-storage` flag is empty by default and accepts either a storage URL or one 
 
 The `-creds` flag accepts:
 
-- `raw`: requires `-access-key` and `-secret-key`; `-session-token` is optional.
+- `raw`: uses `-access-key`, `-secret-key`, `-session-token`.
 - `aws`: loads credentials through the AWS SDK default config.
 - `gcp`: loads Google Cloud application default credentials.
 

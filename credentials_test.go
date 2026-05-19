@@ -53,12 +53,20 @@ func TestNewCredentialConfigInfersRawWhenKeysProvided(t *testing.T) {
 	}
 }
 
-func TestNewCredentialConfigRawRequiresKeys(t *testing.T) {
-	if _, err := newCredentialConfig(context.Background(), "raw", "", "secret", ""); err == nil {
-		t.Fatal("expected error")
+func TestNewCredentialConfigRawAllowsAnonymous(t *testing.T) {
+	cfg, err := newCredentialConfig(context.Background(), "raw", "", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := newCredentialConfig(context.Background(), "raw", "access", "", ""); err == nil {
-		t.Fatal("expected error")
+	if cfg.creds == nil {
+		t.Fatal("expected credentials")
+	}
+	value, err := cfg.creds.Get()
+	if err != nil {
+		t.Fatalf("get credentials: %v", err)
+	}
+	if value.AccessKeyID != "" || value.SecretAccessKey != "" {
+		t.Fatalf("unexpected credential value: %#v", value)
 	}
 }
 
