@@ -123,6 +123,7 @@ even when `-creds` is omitted.
 | `pgup` | Move up by 10 |
 | `pgdown` | Move down by 10 |
 | `enter` | Open selected bucket, folder, or object |
+| `w` | Toggle line wrapping in text previews |
 | `backspace`, `esc`, `left`, `h` | Go back |
 | `r` | Reload current view |
 | `q`, `ctrl+c` | Quit |
@@ -133,5 +134,6 @@ first item, and moving above the first item selects the last item.
 ## Preview Behavior
 
 Object previews are limited to the first 256 KiB. Text previews are sanitized so
-terminal control bytes cannot affect the interface. Binary previews are rendered
-as hex dumps, while metadata remains visible above the preview.
+terminal control bytes cannot affect the interface, include line numbers, and
+can be wrapped to the terminal width with `w`. Binary previews are rendered as
+hex dumps, while metadata remains visible above the preview.

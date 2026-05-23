@@ -61,6 +61,7 @@ type model struct {
 
 	detail       objectDetail
 	detailScroll int
+	detailWrap   bool
 }
 
 type bucketsLoadedMsg struct {
@@ -167,6 +168,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = viewDetail
 			m.detail = msg.detail
 			m.detailScroll = 0
+			m.detailWrap = false
 		}
 	}
 	return m, nil
@@ -212,6 +214,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		if m.mode == viewDetail {
 			return m, copyText("preview", m.detail.Preview)
+		}
+	case "w":
+		if m.mode == viewDetail && !m.detail.Binary {
+			m.detailWrap = !m.detailWrap
+			m.detailScroll = clamp(m.detailScroll, 0, m.maxDetailScroll())
 		}
 	case "backspace", "esc", "left", "h":
 		return m.goBack()
@@ -338,7 +345,11 @@ func (m model) footer() string {
 	case viewObjects:
 		return "enter open/view  c copy uri  backspace back  r reload  q quit"
 	case viewDetail:
-		return "c copy uri  m copy metadata  p copy preview  backspace back  r reload  q quit"
+		wrapState := "off"
+		if m.detailWrap {
+			wrapState = "on"
+		}
+		return "w wrap " + wrapState + "  c copy uri  m copy metadata  p copy preview  backspace back  r reload  q quit"
 	default:
 		return "enter open/view  backspace back  r reload  q quit"
 	}
@@ -422,7 +433,7 @@ func blankObjectSize() string {
 }
 
 func (m model) viewDetail() string {
-	lines := objectDetailLines(m.activeBucket, m.detail)
+	lines := m.objectDetailLines()
 	m.detailScroll = clamp(m.detailScroll, 0, m.maxDetailScroll())
 	visible := visibleHeight(m.height)
 	end := min(len(lines), m.detailScroll+visible)
@@ -430,6 +441,14 @@ func (m model) viewDetail() string {
 }
 
 func objectDetailLines(bucket string, detail objectDetail) []string {
+	return objectDetailLinesWithOptions(bucket, detail, 0, false)
+}
+
+func (m model) objectDetailLines() []string {
+	return objectDetailLinesWithOptions(m.activeBucket, m.detail, m.width, m.detailWrap)
+}
+
+func objectDetailLinesWithOptions(bucket string, detail objectDetail, width int, wrap bool) []string {
 	lines := []string{
 		"Size: " + formatBytes(detail.Object.Size),
 	}
@@ -459,13 +478,60 @@ func objectDetailLines(bucket string, detail objectDetail) []string {
 	}
 	if detail.Preview == "" {
 		lines = append(lines, "(empty)")
-	} else {
+	} else if detail.Binary {
 		lines = append(lines, strings.Split(detail.Preview, "\n")...)
+	} else {
+		lines = append(lines, numberedPreviewLines(detail.Preview, width, wrap)...)
 	}
 	if detail.Truncated {
 		lines = append(lines, "", fmt.Sprintf("[preview truncated at %s]", formatBytes(detail.PreviewLen)))
 	}
 	return lines
+}
+
+func numberedPreviewLines(preview string, width int, wrap bool) []string {
+	rawLines := strings.Split(preview, "\n")
+	if len(rawLines) > 1 && rawLines[len(rawLines)-1] == "" {
+		rawLines = rawLines[:len(rawLines)-1]
+	}
+	numberWidth := len(fmt.Sprintf("%d", max(1, len(rawLines))))
+	prefixWidth := numberWidth + len(" | ")
+	contentWidth := 0
+	if wrap && width > prefixWidth {
+		contentWidth = width - prefixWidth
+	}
+
+	lines := make([]string, 0, len(rawLines))
+	for i, line := range rawLines {
+		prefix := fmt.Sprintf("%*d | ", numberWidth, i+1)
+		if contentWidth <= 0 {
+			lines = append(lines, prefix+line)
+			continue
+		}
+		wrapped := wrapTextLine(line, contentWidth)
+		for j, part := range wrapped {
+			if j == 0 {
+				lines = append(lines, prefix+part)
+			} else {
+				lines = append(lines, strings.Repeat(" ", numberWidth)+" | "+part)
+			}
+		}
+	}
+	return lines
+}
+
+func wrapTextLine(line string, width int) []string {
+	runes := []rune(line)
+	if width <= 0 || len(runes) <= width {
+		return []string{line}
+	}
+	parts := make([]string, 0, (len(runes)/width)+1)
+	for len(runes) > width {
+		parts = append(parts, string(runes[:width]))
+		runes = runes[width:]
+	}
+	parts = append(parts, string(runes))
+	return parts
 }
 
 func s3URI(bucket, key string) string {
@@ -658,7 +724,7 @@ func visibleHeight(height int) int {
 }
 
 func (m model) maxDetailScroll() int {
-	return max(0, len(objectDetailLines(m.activeBucket, m.detail))-visibleHeight(m.height))
+	return max(0, len(m.objectDetailLines())-visibleHeight(m.height))
 }
 
 func wrapCursor(cursor, delta, count int) int {

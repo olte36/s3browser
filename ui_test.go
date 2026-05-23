@@ -340,6 +340,45 @@ func TestObjectDetailLinesRenderMetadataForBinaryPreview(t *testing.T) {
 	}
 }
 
+func TestObjectDetailLinesNumberTextPreview(t *testing.T) {
+	lines := strings.Join(objectDetailLines("bucket", objectDetail{
+		Object:  objectItem{Key: "notes.txt", Size: 11},
+		Preview: "first\nsecond\n",
+	}), "\n")
+
+	for _, want := range []string{"1 | first", "2 | second"} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("detail lines missing numbered preview %q:\n%s", want, lines)
+		}
+	}
+}
+
+func TestDetailWrapToggleWrapsTextPreview(t *testing.T) {
+	m := newModel(context.Background(), "AWS", fakeService{})
+	m.mode = viewDetail
+	m.width = 12
+	m.height = 20
+	m.detail = objectDetail{
+		Object:  objectItem{Key: "long.txt", Size: 10},
+		Preview: "abcdefghij",
+	}
+
+	view := plainTerminalText(m.viewDetail())
+	if !strings.Contains(view, "1 | abcdefghij") {
+		t.Fatalf("unwrapped detail view missing original line:\n%s", view)
+	}
+
+	modelAfter, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = modelAfter.(model)
+	view = plainTerminalText(m.viewDetail())
+	if !strings.Contains(view, "1 | abcdefgh") || !strings.Contains(view, "  | ij") {
+		t.Fatalf("wrapped detail view missing wrapped numbered lines:\n%s", view)
+	}
+	if !strings.Contains(m.footer(), "w wrap on") {
+		t.Fatalf("footer missing wrap state: %q", m.footer())
+	}
+}
+
 func TestObjectListCopyKeyReturnsCopyCommand(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
