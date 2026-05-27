@@ -17,7 +17,7 @@ const previewBytes = 256 * 1024
 
 type s3Service interface {
 	ListBuckets(ctx context.Context) ([]bucketItem, error)
-	ListObjects(ctx context.Context, bucket, prefix string) ([]objectItem, error)
+	ListObjects(ctx context.Context, bucket, prefix string, progress func(int)) ([]objectItem, error)
 	InspectObject(ctx context.Context, bucket, key string, limit int64) (objectDetail, error)
 }
 
@@ -80,7 +80,7 @@ func (s *minioService) ListBuckets(ctx context.Context) ([]bucketItem, error) {
 	return items, nil
 }
 
-func (s *minioService) ListObjects(ctx context.Context, bucket, prefix string) ([]objectItem, error) {
+func (s *minioService) ListObjects(ctx context.Context, bucket, prefix string, progress func(int)) ([]objectItem, error) {
 	objectCh := s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
 		Prefix:    strings.TrimPrefix(prefix, "/"),
 		Recursive: false,
@@ -88,7 +88,8 @@ func (s *minioService) ListObjects(ctx context.Context, bucket, prefix string) (
 	var objects []objectItem
 	for obj := range objectCh {
 		if obj.Err != nil {
-			return nil, obj.Err
+			sortObjects(objects)
+			return objects, obj.Err
 		}
 		objects = append(objects, objectItem{
 			Key:          obj.Key,
@@ -98,9 +99,16 @@ func (s *minioService) ListObjects(ctx context.Context, bucket, prefix string) (
 			ContentType:  obj.ContentType,
 			IsPrefix:     strings.HasSuffix(obj.Key, "/") && obj.Size == 0 && obj.ETag == "",
 		})
+		if progress != nil {
+			progress(len(objects))
+		}
 	}
-	sort.Slice(objects, func(i, j int) bool { return objects[i].Key < objects[j].Key })
+	sortObjects(objects)
 	return objects, nil
+}
+
+func sortObjects(objects []objectItem) {
+	sort.Slice(objects, func(i, j int) bool { return objects[i].Key < objects[j].Key })
 }
 
 func (s *minioService) InspectObject(ctx context.Context, bucket, key string, limit int64) (objectDetail, error) {

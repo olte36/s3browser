@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	osc52 "github.com/aymanbagabas/go-osc52/v2"
@@ -51,13 +53,18 @@ type model struct {
 	bucketScroll int
 	activeBucket string
 
-	objectCache  map[string]objectItem
-	loadedPrefix map[string]bool
-	root         *treeNode
-	current      *treeNode
-	pathStack    []*treeNode
-	objectCursor int
-	objectScroll int
+	objectCache           map[string]objectItem
+	loadedPrefix          map[string]bool
+	root                  *treeNode
+	current               *treeNode
+	pathStack             []*treeNode
+	objectCursor          int
+	objectScroll          int
+	objectLoadID          int
+	objectLoadCancel      context.CancelFunc
+	objectLoadProgress    *atomic.Int64
+	objectLoadCount       int
+	objectLoadInterrupted bool
 
 	detail       objectDetail
 	detailScroll int
@@ -70,10 +77,15 @@ type bucketsLoadedMsg struct {
 }
 
 type objectsLoadedMsg struct {
+	loadID  int
 	bucket  string
 	prefix  string
 	objects []objectItem
 	err     error
+}
+
+type objectLoadProgressMsg struct {
+	loadID int
 }
 
 type detailLoadedMsg struct {
@@ -128,6 +140,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.id == m.statusID {
 			m.status = ""
 		}
+	case objectLoadProgressMsg:
+		if msg.loadID == m.objectLoadID && m.loading && m.objectLoadProgress != nil {
+			m.objectLoadCount = int(m.objectLoadProgress.Load())
+			return m, objectLoadProgressTick(msg.loadID)
+		}
 	case bucketsLoadedMsg:
 		m.loading = false
 		m.err = msg.err
@@ -136,10 +153,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bucketCursor = clampCursor(m.bucketCursor, len(m.buckets))
 		m.bucketScroll = clampListScroll(m.bucketScroll, m.bucketCursor, len(m.buckets), visibleHeight(m.height))
 	case objectsLoadedMsg:
+		if msg.loadID != 0 && msg.loadID != m.objectLoadID {
+			return m, nil
+		}
 		m.loading = false
-		m.err = msg.err
+		m.objectLoadCancel = nil
+		m.objectLoadProgress = nil
+		m.objectLoadCount = len(msg.objects)
+		m.objectLoadInterrupted = false
+		m.err = nil
 		m.status = ""
-		if msg.err == nil {
+		if msg.err == nil || errors.Is(msg.err, context.Canceled) {
 			oldBucket := m.activeBucket
 			m.mode = viewObjects
 			m.activeBucket = msg.bucket
@@ -150,7 +174,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loadedPrefix = map[string]bool{}
 			}
 			m.mergeObjects(msg.prefix, msg.objects)
-			m.loadedPrefix[normalizePrefix(msg.prefix)] = true
+			if msg.err == nil {
+				m.loadedPrefix[normalizePrefix(msg.prefix)] = true
+			} else {
+				m.objectLoadInterrupted = true
+			}
 			m.rebuildObjectTree()
 			m.current = m.findNode(normalizePrefix(msg.prefix))
 			if m.current == nil {
@@ -159,6 +187,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pathStack = pathStackForPrefix(m.root, normalizePrefix(msg.prefix))
 			m.objectCursor = 0
 			m.objectScroll = 0
+		} else {
+			m.err = msg.err
 		}
 	case detailLoadedMsg:
 		m.loading = false
@@ -178,7 +208,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
+	case "x":
+		if m.loading && m.objectLoadCancel != nil {
+			m.objectLoadCancel()
+			m.status = "Canceling object load..."
+			return m, nil
+		}
 	case "r":
+		m.cancelObjectLoad()
 		m.loading = true
 		m.err = nil
 		m.status = ""
@@ -186,7 +223,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case viewBuckets:
 			return m, m.loadBuckets()
 		case viewObjects:
-			return m, m.loadObjects(m.activeBucket, currentObjectPath(m.current))
+			return m, m.startObjectLoad(m.activeBucket, currentObjectPath(m.current))
 		case viewDetail:
 			return m, m.loadDetail(m.activeBucket, m.detail.Object.Key)
 		}
@@ -253,7 +290,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		bucket := m.buckets[m.bucketCursor].Name
 		m.loading = true
 		m.err = nil
-		return m, m.loadObjects(bucket, "")
+		return m, m.startObjectLoad(bucket, "")
 	case viewObjects:
 		entries := listChildren(m.current)
 		if len(entries) == 0 {
@@ -264,7 +301,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 			if !m.loadedPrefix[normalizePrefix(node.Path)] {
 				m.loading = true
 				m.err = nil
-				return m, m.loadObjects(m.activeBucket, node.Path)
+				return m, m.startObjectLoad(m.activeBucket, node.Path)
 			}
 			m.pathStack = append(m.pathStack, m.current)
 			m.current = node
@@ -304,13 +341,16 @@ func (m model) View() string {
 	b.WriteString(m.header())
 	b.WriteString("\n\n")
 	if m.loading {
-		b.WriteString("Loading...\n")
+		b.WriteString(m.loadingLine() + "\n")
 	}
 	if m.err != nil {
 		b.WriteString("Error: " + m.err.Error() + "\n\n")
 	}
 	if m.status != "" {
 		b.WriteString(m.status + "\n\n")
+	}
+	if !m.loading && m.mode == viewObjects && m.objectLoadCount > 0 {
+		b.WriteString(m.objectLoadSummaryLine() + "\n\n")
 	}
 
 	switch m.mode {
@@ -341,6 +381,9 @@ func (m model) header() string {
 }
 
 func (m model) footer() string {
+	if m.loading && m.objectLoadCancel != nil {
+		return "x cancel load  q quit"
+	}
 	switch m.mode {
 	case viewObjects:
 		return "enter open/view  c copy uri  backspace back  r reload  q quit"
@@ -353,6 +396,20 @@ func (m model) footer() string {
 	default:
 		return "enter open/view  backspace back  r reload  q quit"
 	}
+}
+
+func (m model) loadingLine() string {
+	if m.objectLoadCancel != nil {
+		return fmt.Sprintf("Loading objects... %d loaded (press x to cancel)", m.objectLoadCount)
+	}
+	return "Loading..."
+}
+
+func (m model) objectLoadSummaryLine() string {
+	if m.objectLoadInterrupted {
+		return fmt.Sprintf("Objects loaded: %d (interrupted)", m.objectLoadCount)
+	}
+	return fmt.Sprintf("Objects loaded: %d", m.objectLoadCount)
 }
 
 const listTimestampLayout = "2006-01-02 15:04:05"
@@ -581,6 +638,12 @@ func clearStatusAfter(id int) tea.Cmd {
 	})
 }
 
+func objectLoadProgressTick(loadID int) tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return objectLoadProgressMsg{loadID: loadID}
+	})
+}
+
 func (m model) loadBuckets() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
@@ -590,12 +653,37 @@ func (m model) loadBuckets() tea.Cmd {
 	}
 }
 
-func (m model) loadObjects(bucket, prefix string) tea.Cmd {
+func (m *model) startObjectLoad(bucket, prefix string) tea.Cmd {
+	m.cancelObjectLoad()
+	m.objectLoadID++
+	m.objectLoadCount = 0
+	m.objectLoadInterrupted = false
+	progress := &atomic.Int64{}
+	m.objectLoadProgress = progress
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.objectLoadCancel = cancel
+	loadID := m.objectLoadID
+	return tea.Batch(
+		m.loadObjects(ctx, loadID, bucket, prefix, progress),
+		objectLoadProgressTick(loadID),
+	)
+}
+
+func (m *model) cancelObjectLoad() {
+	if m.objectLoadCancel != nil {
+		m.objectLoadCancel()
+		m.objectLoadCancel = nil
+	}
+}
+
+func (m model) loadObjects(ctx context.Context, loadID int, bucket, prefix string, progress *atomic.Int64) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
-		defer cancel()
-		objects, err := m.service.ListObjects(ctx, bucket, prefix)
-		return objectsLoadedMsg{bucket: bucket, prefix: prefix, objects: objects, err: err}
+		objects, err := m.service.ListObjects(ctx, bucket, prefix, func(count int) {
+			if progress != nil {
+				progress.Store(int64(count))
+			}
+		})
+		return objectsLoadedMsg{loadID: loadID, bucket: bucket, prefix: prefix, objects: objects, err: err}
 	}
 }
 

@@ -29,12 +29,37 @@ func (f fakeService) ListBuckets(context.Context) ([]bucketItem, error) {
 	return f.buckets, f.err
 }
 
-func (f fakeService) ListObjects(context.Context, string, string) ([]objectItem, error) {
+func (f fakeService) ListObjects(_ context.Context, _, _ string, progress func(int)) ([]objectItem, error) {
+	if progress != nil {
+		progress(len(f.objects))
+	}
 	return f.objects, f.err
 }
 
 func (f fakeService) InspectObject(context.Context, string, string, int64) (objectDetail, error) {
 	return f.detail, f.err
+}
+
+func objectsLoadedFromCmd(t *testing.T, cmd tea.Cmd) objectsLoadedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected command")
+	}
+	msg := cmd()
+	if loaded, ok := msg.(objectsLoadedMsg); ok {
+		return loaded
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("command returned %T, want objectsLoadedMsg or tea.BatchMsg", msg)
+	}
+	for _, child := range batch {
+		if loaded, ok := child().(objectsLoadedMsg); ok {
+			return loaded
+		}
+	}
+	t.Fatalf("batch did not contain objectsLoadedMsg: %T", msg)
+	return objectsLoadedMsg{}
 }
 
 func TestModelNavigation(t *testing.T) {
@@ -64,7 +89,7 @@ func TestModelNavigation(t *testing.T) {
 	if cmd == nil || !m.loading {
 		t.Fatal("expected prefix enter to start scoped object load")
 	}
-	lazyMsg := cmd().(objectsLoadedMsg)
+	lazyMsg := objectsLoadedFromCmd(t, cmd)
 	if lazyMsg.bucket != "alpha" || lazyMsg.prefix != "dir/" {
 		t.Fatalf("lazy load requested bucket=%q prefix=%q, want alpha dir/", lazyMsg.bucket, lazyMsg.prefix)
 	}
@@ -106,6 +131,78 @@ func TestModelRendersErrors(t *testing.T) {
 	m = modelAfter.(model)
 	if !strings.Contains(m.View(), "no credentials") {
 		t.Fatalf("view does not contain error: %s", m.View())
+	}
+}
+
+func TestObjectLoadProgressAndCancel(t *testing.T) {
+	m := newModel(context.Background(), "AWS", fakeService{})
+	m.loading = true
+	cmd := m.startObjectLoad("archive", "")
+	if cmd == nil || m.objectLoadCancel == nil || m.objectLoadProgress == nil {
+		t.Fatal("expected cancelable object load command")
+	}
+	if !strings.Contains(m.View(), "0 loaded") || !strings.Contains(m.footer(), "x cancel load") {
+		t.Fatalf("view missing object load progress/cancel:\n%s", m.View())
+	}
+
+	m.objectLoadProgress.Store(3)
+	modelAfter, cmd := m.Update(objectLoadProgressMsg{loadID: m.objectLoadID})
+	m = modelAfter.(model)
+	if cmd == nil || m.objectLoadCount != 3 {
+		t.Fatalf("object load count = %d, want 3", m.objectLoadCount)
+	}
+
+	modelAfter, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = modelAfter.(model)
+	if !strings.Contains(m.View(), "Canceling object load") {
+		t.Fatalf("view missing canceling status:\n%s", m.View())
+	}
+}
+
+func TestCanceledObjectLoadKeepsPartialObjects(t *testing.T) {
+	m := newModel(context.Background(), "AWS", fakeService{})
+	m.loading = true
+	m.objectLoadID = 7
+	modelAfter, _ := m.Update(objectsLoadedMsg{
+		loadID: 7,
+		bucket: "archive",
+		objects: []objectItem{
+			{Key: "partial.txt"},
+		},
+		err: context.Canceled,
+	})
+	m = modelAfter.(model)
+
+	if m.loading || m.err != nil || m.mode != viewObjects {
+		t.Fatalf("unexpected canceled load state: loading=%v err=%v mode=%v", m.loading, m.err, m.mode)
+	}
+	if !strings.Contains(plainTerminalText(m.viewObjects()), "partial.txt") {
+		t.Fatalf("partial object not rendered:\n%s", m.viewObjects())
+	}
+	if m.loadedPrefix[""] {
+		t.Fatal("canceled load should not mark prefix as fully loaded")
+	}
+	if !strings.Contains(m.View(), "Objects loaded: 1 (interrupted)") {
+		t.Fatalf("view missing interrupted object count:\n%s", m.View())
+	}
+}
+
+func TestCompletedObjectLoadShowsLoadedCount(t *testing.T) {
+	m := newModel(context.Background(), "AWS", fakeService{})
+	modelAfter, _ := m.Update(objectsLoadedMsg{
+		bucket: "archive",
+		objects: []objectItem{
+			{Key: "one.txt"},
+			{Key: "two.txt"},
+		},
+	})
+	m = modelAfter.(model)
+
+	if !strings.Contains(m.View(), "Objects loaded: 2") {
+		t.Fatalf("view missing completed object count:\n%s", m.View())
+	}
+	if strings.Contains(m.View(), "interrupted") {
+		t.Fatalf("completed load should not be marked interrupted:\n%s", m.View())
 	}
 }
 

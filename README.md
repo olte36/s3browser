@@ -124,6 +124,7 @@ even when `-creds` is omitted.
 | `pgdown` | Move down by 10 |
 | `enter` | Open selected bucket, folder, or object |
 | `w` | Toggle line wrapping in text previews |
+| `x` | Cancel an active object load |
 | `backspace`, `esc`, `left`, `h` | Go back |
 | `r` | Reload current view |
 | `q`, `ctrl+c` | Quit |
