@@ -13,20 +13,24 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
+// previewBytes limits the amount of object data read for previews.
 const previewBytes = 256 * 1024
 
+// s3Service defines the storage operations required by the terminal UI.
 type s3Service interface {
 	ListBuckets(ctx context.Context) ([]bucketItem, error)
 	ListObjects(ctx context.Context, bucket, prefix string, progress func(int)) ([]objectItem, error)
 	InspectObject(ctx context.Context, bucket, key string, limit int64) (objectDetail, error)
 }
 
+// bucketItem contains display metadata for a storage bucket.
 type bucketItem struct {
 	Name         string
 	CreationDate time.Time
 	Region       string
 }
 
+// objectItem contains display and preview metadata for an object or prefix.
 type objectItem struct {
 	Key          string
 	Size         int64
@@ -36,6 +40,7 @@ type objectItem struct {
 	IsPrefix     bool
 }
 
+// objectDetail contains object metadata and a bounded preview payload.
 type objectDetail struct {
 	Object     objectItem
 	Metadata   map[string]string
@@ -45,10 +50,12 @@ type objectDetail struct {
 	PreviewLen int64
 }
 
+// minioService implements s3Service using the MinIO client.
 type minioService struct {
 	client *minio.Client
 }
 
+// newMinioService creates a MinIO-backed storage service.
 func newMinioService(cfg endpointConfig, auth credentialConfig) (*minioService, error) {
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:        auth.creds,
@@ -63,6 +70,7 @@ func newMinioService(cfg endpointConfig, auth credentialConfig) (*minioService, 
 	return &minioService{client: client}, nil
 }
 
+// ListBuckets returns buckets sorted by name.
 func (s *minioService) ListBuckets(ctx context.Context) ([]bucketItem, error) {
 	buckets, err := s.client.ListBuckets(ctx)
 	if err != nil {
@@ -80,6 +88,7 @@ func (s *minioService) ListBuckets(ctx context.Context) ([]bucketItem, error) {
 	return items, nil
 }
 
+// ListObjects returns objects under a prefix and reports incremental progress.
 func (s *minioService) ListObjects(ctx context.Context, bucket, prefix string, progress func(int)) ([]objectItem, error) {
 	objectCh := s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
 		Prefix:    strings.TrimPrefix(prefix, "/"),
@@ -107,10 +116,7 @@ func (s *minioService) ListObjects(ctx context.Context, bucket, prefix string, p
 	return objects, nil
 }
 
-func sortObjects(objects []objectItem) {
-	sort.Slice(objects, func(i, j int) bool { return objects[i].Key < objects[j].Key })
-}
-
+// InspectObject returns metadata and a text or hex preview for one object.
 func (s *minioService) InspectObject(ctx context.Context, bucket, key string, limit int64) (objectDetail, error) {
 	stat, err := s.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
 	if err != nil {
@@ -155,6 +161,12 @@ func (s *minioService) InspectObject(ctx context.Context, bucket, key string, li
 	}, nil
 }
 
+// sortObjects orders objects by key for stable display.
+func sortObjects(objects []objectItem) {
+	sort.Slice(objects, func(i, j int) bool { return objects[i].Key < objects[j].Key })
+}
+
+// renderPreview returns a terminal-safe text preview or hex dump.
 func renderPreview(buf []byte) (string, bool) {
 	if len(buf) == 0 {
 		return "", false
@@ -165,6 +177,7 @@ func renderPreview(buf []byte) (string, bool) {
 	return sanitizeTerminalText(string(buf)), false
 }
 
+// isBinaryPreview reports whether bytes should be shown as hex instead of text.
 func isBinaryPreview(buf []byte) bool {
 	if !utf8.Valid(buf) {
 		return true
@@ -184,6 +197,7 @@ func isBinaryPreview(buf []byte) bool {
 	return controlBytes > 0 && controlBytes*100/len(buf) > 20
 }
 
+// sanitizeTerminalText removes terminal control bytes from text previews.
 func sanitizeTerminalText(text string) string {
 	return strings.Map(func(r rune) rune {
 		switch r {
@@ -197,6 +211,7 @@ func sanitizeTerminalText(text string) string {
 	}, text)
 }
 
+// flattenMetadata converts multi-value metadata headers into display values.
 func flattenMetadata(metadata map[string][]string) map[string]string {
 	out := make(map[string]string, len(metadata))
 	for key, values := range metadata {
@@ -209,6 +224,7 @@ func flattenMetadata(metadata map[string][]string) map[string]string {
 	return out
 }
 
+// formatBytes renders a byte count as a compact IEC string.
 func formatBytes(size int64) string {
 	const unit = 1024
 	if size < unit {

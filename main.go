@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// main starts the terminal browser and reports startup or runtime errors.
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -19,6 +20,7 @@ func main() {
 	}
 }
 
+// run parses configuration, creates the storage service, and runs the UI.
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

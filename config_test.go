@@ -2,6 +2,7 @@ package main
 
 import "testing"
 
+// TestParseEndpoint verifies endpoint alias resolution and validation.
 func TestParseEndpoint(t *testing.T) {
 	tests := []struct {
 		name     string

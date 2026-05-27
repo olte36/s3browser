@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestNewCredentialConfigRaw verifies explicit raw credentials are preserved.
 func TestNewCredentialConfigRaw(t *testing.T) {
 	cfg, err := newCredentialConfig(context.Background(), "raw", "access", "secret", "token")
 	if err != nil {
@@ -25,6 +26,7 @@ func TestNewCredentialConfigRaw(t *testing.T) {
 	}
 }
 
+// TestNewCredentialConfigDefaultsToRaw verifies empty credential mode uses raw credentials.
 func TestNewCredentialConfigDefaultsToRaw(t *testing.T) {
 	cfg, err := newCredentialConfig(context.Background(), "", "access", "secret", "")
 	if err != nil {
@@ -39,6 +41,7 @@ func TestNewCredentialConfigDefaultsToRaw(t *testing.T) {
 	}
 }
 
+// TestNewCredentialConfigInfersRawWhenKeysProvided verifies keys override AWS mode.
 func TestNewCredentialConfigInfersRawWhenKeysProvided(t *testing.T) {
 	cfg, err := newCredentialConfig(context.Background(), "aws", "access", "secret", "")
 	if err != nil {
@@ -53,6 +56,7 @@ func TestNewCredentialConfigInfersRawWhenKeysProvided(t *testing.T) {
 	}
 }
 
+// TestNewCredentialConfigRawAllowsAnonymous verifies empty raw credentials create anonymous access.
 func TestNewCredentialConfigRawAllowsAnonymous(t *testing.T) {
 	cfg, err := newCredentialConfig(context.Background(), "raw", "", "", "")
 	if err != nil {
@@ -70,6 +74,7 @@ func TestNewCredentialConfigRawAllowsAnonymous(t *testing.T) {
 	}
 }
 
+// TestNewCredentialConfigRejectsUnknownMode verifies invalid credential modes fail.
 func TestNewCredentialConfigRejectsUnknownMode(t *testing.T) {
 	if _, err := newCredentialConfig(context.Background(), "other", "", "", ""); err == nil {
 		t.Fatal("expected error")

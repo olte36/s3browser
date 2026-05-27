@@ -2,6 +2,7 @@ package main
 
 import "testing"
 
+// TestBuildObjectTree verifies flat object keys become a sorted tree.
 func TestBuildObjectTree(t *testing.T) {
 	objects := []objectItem{
 		{Key: "root.txt", Size: 10},
@@ -32,6 +33,7 @@ func TestBuildObjectTree(t *testing.T) {
 	}
 }
 
+// TestBuildObjectTreeEmpty verifies an empty object list creates an empty root.
 func TestBuildObjectTreeEmpty(t *testing.T) {
 	root := buildObjectTree(nil)
 	if got := listChildren(root); len(got) != 0 {
@@ -39,6 +41,7 @@ func TestBuildObjectTreeEmpty(t *testing.T) {
 	}
 }
 
+// TestBuildObjectTreeDirectoryPlaceholder verifies directory placeholders remain folders.
 func TestBuildObjectTreeDirectoryPlaceholder(t *testing.T) {
 	root := buildObjectTree([]objectItem{{Key: "folder/"}, {Key: "folder/file.txt", Size: 1}})
 	folder := root.Children["folder"]
@@ -53,6 +56,7 @@ func TestBuildObjectTreeDirectoryPlaceholder(t *testing.T) {
 	}
 }
 
+// TestBuildObjectTreeObjectPrefixCollision verifies object keys can become folders.
 func TestBuildObjectTreeObjectPrefixCollision(t *testing.T) {
 	root := buildObjectTree([]objectItem{{Key: "dir", Size: 1}, {Key: "dir/file.txt", Size: 2}})
 	dir := root.Children["dir"]

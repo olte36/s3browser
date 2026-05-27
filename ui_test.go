@@ -12,12 +12,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// ansiEscapePattern matches style escape sequences for plain-text assertions.
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-func plainTerminalText(value string) string {
-	return ansiEscapePattern.ReplaceAllString(value, "")
-}
-
+// fakeService provides deterministic storage responses for UI tests.
 type fakeService struct {
 	buckets []bucketItem
 	objects []objectItem
@@ -25,43 +23,7 @@ type fakeService struct {
 	err     error
 }
 
-func (f fakeService) ListBuckets(context.Context) ([]bucketItem, error) {
-	return f.buckets, f.err
-}
-
-func (f fakeService) ListObjects(_ context.Context, _, _ string, progress func(int)) ([]objectItem, error) {
-	if progress != nil {
-		progress(len(f.objects))
-	}
-	return f.objects, f.err
-}
-
-func (f fakeService) InspectObject(context.Context, string, string, int64) (objectDetail, error) {
-	return f.detail, f.err
-}
-
-func objectsLoadedFromCmd(t *testing.T, cmd tea.Cmd) objectsLoadedMsg {
-	t.Helper()
-	if cmd == nil {
-		t.Fatal("expected command")
-	}
-	msg := cmd()
-	if loaded, ok := msg.(objectsLoadedMsg); ok {
-		return loaded
-	}
-	batch, ok := msg.(tea.BatchMsg)
-	if !ok {
-		t.Fatalf("command returned %T, want objectsLoadedMsg or tea.BatchMsg", msg)
-	}
-	for _, child := range batch {
-		if loaded, ok := child().(objectsLoadedMsg); ok {
-			return loaded
-		}
-	}
-	t.Fatalf("batch did not contain objectsLoadedMsg: %T", msg)
-	return objectsLoadedMsg{}
-}
-
+// TestModelNavigation verifies bucket, prefix, object, and back navigation.
 func TestModelNavigation(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(bucketsLoadedMsg{buckets: []bucketItem{{Name: "alpha"}}})
@@ -125,6 +87,7 @@ func TestModelNavigation(t *testing.T) {
 	}
 }
 
+// TestModelRendersErrors verifies load errors appear in the view.
 func TestModelRendersErrors(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(bucketsLoadedMsg{err: errors.New("no credentials")})
@@ -134,6 +97,7 @@ func TestModelRendersErrors(t *testing.T) {
 	}
 }
 
+// TestObjectLoadProgressAndCancel verifies object load progress and cancellation UI.
 func TestObjectLoadProgressAndCancel(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	m.loading = true
@@ -159,6 +123,7 @@ func TestObjectLoadProgressAndCancel(t *testing.T) {
 	}
 }
 
+// TestCanceledObjectLoadKeepsPartialObjects verifies canceled loads retain partial results.
 func TestCanceledObjectLoadKeepsPartialObjects(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	m.loading = true
@@ -187,6 +152,7 @@ func TestCanceledObjectLoadKeepsPartialObjects(t *testing.T) {
 	}
 }
 
+// TestCompletedObjectLoadShowsLoadedCount verifies completed loads show a count.
 func TestCompletedObjectLoadShowsLoadedCount(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
@@ -206,6 +172,7 @@ func TestCompletedObjectLoadShowsLoadedCount(t *testing.T) {
 	}
 }
 
+// TestModelCursorWrapsAroundBucketsAndObjects verifies list cursors wrap at ends.
 func TestModelCursorWrapsAroundBucketsAndObjects(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(bucketsLoadedMsg{buckets: []bucketItem{{Name: "a"}, {Name: "b"}, {Name: "c"}}})
@@ -245,6 +212,7 @@ func TestModelCursorWrapsAroundBucketsAndObjects(t *testing.T) {
 	}
 }
 
+// TestBucketListScrollsToSelectedBucket verifies bucket scrolling follows selection.
 func TestBucketListScrollsToSelectedBucket(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	m.height = 12
@@ -269,6 +237,7 @@ func TestBucketListScrollsToSelectedBucket(t *testing.T) {
 	}
 }
 
+// TestObjectListScrollsToSelectedObject verifies object scrolling follows selection.
 func TestObjectListScrollsToSelectedObject(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	m.height = 12
@@ -293,6 +262,7 @@ func TestObjectListScrollsToSelectedObject(t *testing.T) {
 	}
 }
 
+// TestBucketRowsRenderTimestampBeforeName verifies bucket row column order.
 func TestBucketRowsRenderTimestampBeforeName(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(bucketsLoadedMsg{buckets: []bucketItem{{
@@ -309,6 +279,7 @@ func TestBucketRowsRenderTimestampBeforeName(t *testing.T) {
 	}
 }
 
+// TestObjectRowsRenderTimestampAndSizeBeforeName verifies object row column order.
 func TestObjectRowsRenderTimestampAndSizeBeforeName(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
@@ -333,6 +304,7 @@ func TestObjectRowsRenderTimestampAndSizeBeforeName(t *testing.T) {
 	}
 }
 
+// TestPrefixRowsRenderPrefixInTimestampColumn verifies prefix rows use prefix markers.
 func TestPrefixRowsRenderPrefixInTimestampColumn(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
@@ -356,6 +328,7 @@ func TestPrefixRowsRenderPrefixInTimestampColumn(t *testing.T) {
 	}
 }
 
+// TestObjectsHeaderShowsStorageAndURIOnSeparateLines verifies object headers stay readable.
 func TestObjectsHeaderShowsStorageAndURIOnSeparateLines(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
@@ -383,6 +356,7 @@ func TestObjectsHeaderShowsStorageAndURIOnSeparateLines(t *testing.T) {
 	}
 }
 
+// TestModelDetailScrollClampsAtEnd verifies detail scrolling cannot pass the final line.
 func TestModelDetailScrollClampsAtEnd(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	m.mode = viewDetail
@@ -402,6 +376,7 @@ func TestModelDetailScrollClampsAtEnd(t *testing.T) {
 	}
 }
 
+// TestDetailHeaderHighlightsObjectPath verifies detail headers include the object URI.
 func TestDetailHeaderHighlightsObjectPath(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	m.mode = viewDetail
@@ -417,6 +392,7 @@ func TestDetailHeaderHighlightsObjectPath(t *testing.T) {
 	}
 }
 
+// TestObjectDetailLinesRenderMetadataForBinaryPreview verifies binary details include metadata.
 func TestObjectDetailLinesRenderMetadataForBinaryPreview(t *testing.T) {
 	lines := strings.Join(objectDetailLines("bucket", objectDetail{
 		Object:   objectItem{Key: "archive/data.bin", Size: 4},
@@ -437,6 +413,7 @@ func TestObjectDetailLinesRenderMetadataForBinaryPreview(t *testing.T) {
 	}
 }
 
+// TestObjectDetailLinesNumberTextPreview verifies text previews are line-numbered.
 func TestObjectDetailLinesNumberTextPreview(t *testing.T) {
 	lines := strings.Join(objectDetailLines("bucket", objectDetail{
 		Object:  objectItem{Key: "notes.txt", Size: 11},
@@ -450,6 +427,7 @@ func TestObjectDetailLinesNumberTextPreview(t *testing.T) {
 	}
 }
 
+// TestDetailWrapToggleWrapsTextPreview verifies wrap mode splits long preview lines.
 func TestDetailWrapToggleWrapsTextPreview(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	m.mode = viewDetail
@@ -476,6 +454,7 @@ func TestDetailWrapToggleWrapsTextPreview(t *testing.T) {
 	}
 }
 
+// TestObjectListCopyKeyReturnsCopyCommand verifies object list copy commands and status.
 func TestObjectListCopyKeyReturnsCopyCommand(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	modelAfter, _ := m.Update(objectsLoadedMsg{
@@ -504,6 +483,7 @@ func TestObjectListCopyKeyReturnsCopyCommand(t *testing.T) {
 	}
 }
 
+// TestDetailCopyKeysReturnCopyCommands verifies detail copy shortcuts produce commands.
 func TestDetailCopyKeysReturnCopyCommands(t *testing.T) {
 	m := newModel(context.Background(), "AWS", fakeService{})
 	m.mode = viewDetail
@@ -536,4 +516,50 @@ func TestDetailCopyKeysReturnCopyCommands(t *testing.T) {
 	if strings.Contains(m.View(), "Copied URI") {
 		t.Fatalf("copy status should be cleared:\n%s", m.View())
 	}
+}
+
+// ListBuckets returns configured buckets or an injected error.
+func (f fakeService) ListBuckets(context.Context) ([]bucketItem, error) {
+	return f.buckets, f.err
+}
+
+// ListObjects returns configured objects and reports their count as progress.
+func (f fakeService) ListObjects(_ context.Context, _, _ string, progress func(int)) ([]objectItem, error) {
+	if progress != nil {
+		progress(len(f.objects))
+	}
+	return f.objects, f.err
+}
+
+// InspectObject returns configured object detail or an injected error.
+func (f fakeService) InspectObject(context.Context, string, string, int64) (objectDetail, error) {
+	return f.detail, f.err
+}
+
+// plainTerminalText strips ANSI styling from terminal output.
+func plainTerminalText(value string) string {
+	return ansiEscapePattern.ReplaceAllString(value, "")
+}
+
+// objectsLoadedFromCmd extracts the object-loaded message from a command or batch.
+func objectsLoadedFromCmd(t *testing.T, cmd tea.Cmd) objectsLoadedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected command")
+	}
+	msg := cmd()
+	if loaded, ok := msg.(objectsLoadedMsg); ok {
+		return loaded
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("command returned %T, want objectsLoadedMsg or tea.BatchMsg", msg)
+	}
+	for _, child := range batch {
+		if loaded, ok := child().(objectsLoadedMsg); ok {
+			return loaded
+		}
+	}
+	t.Fatalf("batch did not contain objectsLoadedMsg: %T", msg)
+	return objectsLoadedMsg{}
 }

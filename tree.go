@@ -5,13 +5,18 @@ import (
 	"strings"
 )
 
-type nodeKind int
-
 const (
-	nodeFolder nodeKind = iota
+	// nodeFolder marks a tree node that represents a prefix.
+	nodeFolder = iota
+
+	// nodeObject marks a tree node that represents a concrete object.
 	nodeObject
 )
 
+// nodeKind identifies whether a tree node is a prefix or an object.
+type nodeKind int
+
+// treeNode represents one navigable item in the object hierarchy.
 type treeNode struct {
 	Name     string
 	Path     string
@@ -20,11 +25,13 @@ type treeNode struct {
 	Children map[string]*treeNode
 }
 
+// navEntry pairs a rendered label with the tree node it selects.
 type navEntry struct {
 	Label string
 	Node  *treeNode
 }
 
+// buildObjectTree converts flat S3 object keys into a navigable hierarchy.
 func buildObjectTree(objects []objectItem) *treeNode {
 	root := &treeNode{Name: "/", Children: map[string]*treeNode{}}
 	for i := range objects {
@@ -74,6 +81,7 @@ func buildObjectTree(objects []objectItem) *treeNode {
 	return root
 }
 
+// listChildren returns sorted navigation entries for a tree node.
 func listChildren(node *treeNode) []navEntry {
 	if node == nil || len(node.Children) == 0 {
 		return nil
@@ -102,6 +110,7 @@ func listChildren(node *treeNode) []navEntry {
 	return entries
 }
 
+// joinKey joins a prefix and name into an object key or folder prefix.
 func joinKey(prefix, name string, folder bool) string {
 	prefix = strings.Trim(prefix, "/")
 	path := name

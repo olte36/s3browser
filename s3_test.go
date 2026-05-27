@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestRenderPreviewSanitizesTextControlBytes verifies text previews cannot emit control bytes.
 func TestRenderPreviewSanitizesTextControlBytes(t *testing.T) {
 	preview, binary := renderPreview([]byte("hello\x1b[2Jworld"))
 	if binary {
@@ -18,6 +19,7 @@ func TestRenderPreviewSanitizesTextControlBytes(t *testing.T) {
 	}
 }
 
+// TestRenderPreviewHexDumpsBinary verifies binary previews are rendered as hex.
 func TestRenderPreviewHexDumpsBinary(t *testing.T) {
 	preview, binary := renderPreview([]byte{0x00, 0x01, 0xff, 0x10})
 	if !binary {

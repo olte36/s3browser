@@ -15,25 +15,50 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var (
-	objectPathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-	timestampStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	sizeStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	headerPathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Bold(true)
-	metadataTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
-	metadataKeyStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("177"))
-	previewTitleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	binaryNoticeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
-)
-
-type viewMode int
-
 const (
-	viewBuckets viewMode = iota
+	// listTimestampLayout formats bucket and object timestamps in list views.
+	listTimestampLayout = "2006-01-02 15:04:05"
+
+	// viewBuckets shows the top-level bucket list.
+	viewBuckets = iota
+
+	// viewObjects shows objects and prefixes within the active bucket.
 	viewObjects
+
+	// viewDetail shows metadata and preview text for the active object.
 	viewDetail
 )
 
+var (
+	// objectPathStyle highlights object paths in object lists.
+	objectPathStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+
+	// timestampStyle dims timestamps and prefix markers in list rows.
+	timestampStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+
+	// sizeStyle highlights object sizes in list rows.
+	sizeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
+	// headerPathStyle highlights the current S3 URI in the header.
+	headerPathStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Bold(true)
+
+	// metadataTitleStyle highlights the metadata section title.
+	metadataTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
+
+	// metadataKeyStyle highlights metadata keys in detail views.
+	metadataKeyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("177"))
+
+	// previewTitleStyle highlights the preview section title.
+	previewTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+
+	// binaryNoticeStyle explains when previews are rendered as hex dumps.
+	binaryNoticeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
+)
+
+// viewMode identifies the active screen in the terminal UI.
+type viewMode int
+
+// model stores all terminal UI state and pending load metadata.
 type model struct {
 	ctx     context.Context
 	storage string
@@ -71,11 +96,13 @@ type model struct {
 	detailWrap   bool
 }
 
+// bucketsLoadedMsg reports the result of loading buckets.
 type bucketsLoadedMsg struct {
 	buckets []bucketItem
 	err     error
 }
 
+// objectsLoadedMsg reports the result of loading objects for a prefix.
 type objectsLoadedMsg struct {
 	loadID  int
 	bucket  string
@@ -84,24 +111,29 @@ type objectsLoadedMsg struct {
 	err     error
 }
 
+// objectLoadProgressMsg triggers a progress refresh for an active object load.
 type objectLoadProgressMsg struct {
 	loadID int
 }
 
+// detailLoadedMsg reports the result of loading an object detail preview.
 type detailLoadedMsg struct {
 	detail objectDetail
 	err    error
 }
 
+// copiedMsg reports the result of copying text to the terminal clipboard.
 type copiedMsg struct {
 	label string
 	err   error
 }
 
+// clearStatusMsg clears a status line if it still matches the active status.
 type clearStatusMsg struct {
 	id int
 }
 
+// newModel creates an initialized terminal UI model.
 func newModel(ctx context.Context, storage string, service s3Service) model {
 	return model{
 		ctx:          ctx,
@@ -114,10 +146,12 @@ func newModel(ctx context.Context, storage string, service s3Service) model {
 	}
 }
 
+// Init starts the initial bucket load command.
 func (m model) Init() tea.Cmd {
 	return m.loadBuckets()
 }
 
+// Update applies terminal messages and returns follow-up commands.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -204,6 +238,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// View renders the complete terminal screen.
+func (m model) View() string {
+	var b strings.Builder
+	b.WriteString(m.header())
+	b.WriteString("\n\n")
+	if m.loading {
+		b.WriteString(m.loadingLine() + "\n")
+	}
+	if m.err != nil {
+		b.WriteString("Error: " + m.err.Error() + "\n\n")
+	}
+	if m.status != "" {
+		b.WriteString(m.status + "\n\n")
+	}
+	if !m.loading && m.mode == viewObjects && m.objectLoadCount > 0 {
+		b.WriteString(m.objectLoadSummaryLine() + "\n\n")
+	}
+
+	switch m.mode {
+	case viewBuckets:
+		b.WriteString(m.viewBuckets())
+	case viewObjects:
+		b.WriteString(m.viewObjects())
+	case viewDetail:
+		b.WriteString(m.viewDetail())
+	}
+	b.WriteString("\n")
+	b.WriteString(m.footer())
+	return b.String()
+}
+
+// handleKey maps keyboard input to model transitions and commands.
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
@@ -263,6 +329,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// moveCursor moves the active list or detail cursor by delta.
 func (m *model) moveCursor(delta int) {
 	switch m.mode {
 	case viewBuckets:
@@ -277,6 +344,7 @@ func (m *model) moveCursor(delta int) {
 	}
 }
 
+// activateSelection opens the selected bucket, prefix, or object.
 func (m model) activateSelection() (tea.Model, tea.Cmd) {
 	if m.loading {
 		return m, nil
@@ -316,6 +384,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// goBack returns to the previous detail, prefix, or bucket view.
 func (m model) goBack() (tea.Model, tea.Cmd) {
 	m.status = ""
 	switch m.mode {
@@ -336,36 +405,7 @@ func (m model) goBack() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
-	var b strings.Builder
-	b.WriteString(m.header())
-	b.WriteString("\n\n")
-	if m.loading {
-		b.WriteString(m.loadingLine() + "\n")
-	}
-	if m.err != nil {
-		b.WriteString("Error: " + m.err.Error() + "\n\n")
-	}
-	if m.status != "" {
-		b.WriteString(m.status + "\n\n")
-	}
-	if !m.loading && m.mode == viewObjects && m.objectLoadCount > 0 {
-		b.WriteString(m.objectLoadSummaryLine() + "\n\n")
-	}
-
-	switch m.mode {
-	case viewBuckets:
-		b.WriteString(m.viewBuckets())
-	case viewObjects:
-		b.WriteString(m.viewObjects())
-	case viewDetail:
-		b.WriteString(m.viewDetail())
-	}
-	b.WriteString("\n")
-	b.WriteString(m.footer())
-	return b.String()
-}
-
+// header renders the storage label and current URI.
 func (m model) header() string {
 	prefix := "s3browser - " + m.storage
 	switch m.mode {
@@ -380,6 +420,7 @@ func (m model) header() string {
 	}
 }
 
+// footer renders context-sensitive keyboard commands.
 func (m model) footer() string {
 	if m.loading && m.objectLoadCancel != nil {
 		return "x cancel load  q quit"
@@ -398,6 +439,7 @@ func (m model) footer() string {
 	}
 }
 
+// loadingLine renders the active loading status.
 func (m model) loadingLine() string {
 	if m.objectLoadCancel != nil {
 		return fmt.Sprintf("Loading objects... %d loaded (press x to cancel)", m.objectLoadCount)
@@ -405,6 +447,7 @@ func (m model) loadingLine() string {
 	return "Loading..."
 }
 
+// objectLoadSummaryLine renders completed or interrupted object load counts.
 func (m model) objectLoadSummaryLine() string {
 	if m.objectLoadInterrupted {
 		return fmt.Sprintf("Objects loaded: %d (interrupted)", m.objectLoadCount)
@@ -412,8 +455,7 @@ func (m model) objectLoadSummaryLine() string {
 	return fmt.Sprintf("Objects loaded: %d", m.objectLoadCount)
 }
 
-const listTimestampLayout = "2006-01-02 15:04:05"
-
+// viewBuckets renders the visible bucket rows.
 func (m model) viewBuckets() string {
 	if len(m.buckets) == 0 && !m.loading {
 		return "No buckets found.\n"
@@ -433,6 +475,7 @@ func (m model) viewBuckets() string {
 	return b.String()
 }
 
+// viewObjects renders the visible object and prefix rows.
 func (m model) viewObjects() string {
 	entries := listChildren(m.current)
 	if len(entries) == 0 && !m.loading {
@@ -453,10 +496,138 @@ func (m model) viewObjects() string {
 	return b.String()
 }
 
+// viewDetail renders the visible object detail rows.
+func (m model) viewDetail() string {
+	lines := m.objectDetailLines()
+	m.detailScroll = clamp(m.detailScroll, 0, m.maxDetailScroll())
+	visible := visibleHeight(m.height)
+	end := min(len(lines), m.detailScroll+visible)
+	return strings.Join(lines[m.detailScroll:end], "\n") + "\n"
+}
+
+// objectDetailLines returns detail rows using the current model display options.
+func (m model) objectDetailLines() []string {
+	return objectDetailLinesWithOptions(m.activeBucket, m.detail, m.width, m.detailWrap)
+}
+
+// loadBuckets returns a command that fetches bucket rows.
+func (m model) loadBuckets() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
+		defer cancel()
+		buckets, err := m.service.ListBuckets(ctx)
+		return bucketsLoadedMsg{buckets: buckets, err: err}
+	}
+}
+
+// startObjectLoad starts a cancelable object load command.
+func (m *model) startObjectLoad(bucket, prefix string) tea.Cmd {
+	m.cancelObjectLoad()
+	m.objectLoadID++
+	m.objectLoadCount = 0
+	m.objectLoadInterrupted = false
+	progress := &atomic.Int64{}
+	m.objectLoadProgress = progress
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.objectLoadCancel = cancel
+	loadID := m.objectLoadID
+	return tea.Batch(
+		m.loadObjects(ctx, loadID, bucket, prefix, progress),
+		objectLoadProgressTick(loadID),
+	)
+}
+
+// cancelObjectLoad stops the active object load if one exists.
+func (m *model) cancelObjectLoad() {
+	if m.objectLoadCancel != nil {
+		m.objectLoadCancel()
+		m.objectLoadCancel = nil
+	}
+}
+
+// loadObjects returns a command that fetches object rows for a prefix.
+func (m model) loadObjects(ctx context.Context, loadID int, bucket, prefix string, progress *atomic.Int64) tea.Cmd {
+	return func() tea.Msg {
+		objects, err := m.service.ListObjects(ctx, bucket, prefix, func(count int) {
+			if progress != nil {
+				progress.Store(int64(count))
+			}
+		})
+		return objectsLoadedMsg{loadID: loadID, bucket: bucket, prefix: prefix, objects: objects, err: err}
+	}
+}
+
+// loadDetail returns a command that fetches object metadata and preview text.
+func (m model) loadDetail(bucket, key string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
+		defer cancel()
+		detail, err := m.service.InspectObject(ctx, bucket, key, previewBytes)
+		return detailLoadedMsg{detail: detail, err: err}
+	}
+}
+
+// mergeObjects updates the object cache for a freshly loaded prefix.
+func (m *model) mergeObjects(prefix string, objects []objectItem) {
+	if m.objectCache == nil {
+		m.objectCache = map[string]objectItem{}
+	}
+	prefix = normalizePrefix(prefix)
+	for key, object := range m.objectCache {
+		if isDirectChildKey(prefix, key, object.IsPrefix) {
+			delete(m.objectCache, key)
+		}
+	}
+	for _, object := range objects {
+		if object.Key == "" {
+			continue
+		}
+		m.objectCache[object.Key] = object
+	}
+}
+
+// rebuildObjectTree rebuilds the navigation tree from cached objects.
+func (m *model) rebuildObjectTree() {
+	objects := make([]objectItem, 0, len(m.objectCache))
+	for _, object := range m.objectCache {
+		objects = append(objects, object)
+	}
+	m.root = buildObjectTree(objects)
+}
+
+// findNode locates a cached tree node by normalized prefix.
+func (m model) findNode(prefix string) *treeNode {
+	prefix = normalizePrefix(prefix)
+	if prefix == "" {
+		return m.root
+	}
+	if m.root == nil {
+		return nil
+	}
+	current := m.root
+	for _, part := range strings.Split(strings.Trim(prefix, "/"), "/") {
+		if part == "" || current.Children == nil {
+			continue
+		}
+		current = current.Children[part]
+		if current == nil {
+			return nil
+		}
+	}
+	return current
+}
+
+// maxDetailScroll returns the largest valid scroll offset for detail rows.
+func (m model) maxDetailScroll() int {
+	return max(0, len(m.objectDetailLines())-visibleHeight(m.height))
+}
+
+// styledListTimestamp renders a timestamp for bucket and object rows.
 func styledListTimestamp(value time.Time) string {
 	return timestampStyle.Render(formatListTimestamp(value))
 }
 
+// styledObjectTimestamp renders an object timestamp or prefix marker.
 func styledObjectTimestamp(node *treeNode) string {
 	if node != nil && node.Kind == nodeFolder {
 		return timestampStyle.Render(fmt.Sprintf("%-*s", len(listTimestampLayout), "PREFIX"))
@@ -467,6 +638,7 @@ func styledObjectTimestamp(node *treeNode) string {
 	return styledListTimestamp(node.Object.LastModified)
 }
 
+// styledObjectSize renders the object size column.
 func styledObjectSize(node *treeNode) string {
 	if node == nil || node.Kind != nodeObject || node.Object == nil {
 		return sizeStyle.Render(blankObjectSize())
@@ -474,6 +646,7 @@ func styledObjectSize(node *treeNode) string {
 	return sizeStyle.Render(fmt.Sprintf("%12s", formatBytes(node.Object.Size)))
 }
 
+// formatListTimestamp formats a timestamp or returns a blank timestamp column.
 func formatListTimestamp(value time.Time) string {
 	if value.IsZero() {
 		return blankTimestamp()
@@ -481,30 +654,22 @@ func formatListTimestamp(value time.Time) string {
 	return value.Format(listTimestampLayout)
 }
 
+// blankTimestamp returns spacing for an empty timestamp column.
 func blankTimestamp() string {
 	return strings.Repeat(" ", len(listTimestampLayout))
 }
 
+// blankObjectSize returns spacing for an empty size column.
 func blankObjectSize() string {
 	return strings.Repeat(" ", 12)
 }
 
-func (m model) viewDetail() string {
-	lines := m.objectDetailLines()
-	m.detailScroll = clamp(m.detailScroll, 0, m.maxDetailScroll())
-	visible := visibleHeight(m.height)
-	end := min(len(lines), m.detailScroll+visible)
-	return strings.Join(lines[m.detailScroll:end], "\n") + "\n"
-}
-
+// objectDetailLines returns detail rows with default wrapping options.
 func objectDetailLines(bucket string, detail objectDetail) []string {
 	return objectDetailLinesWithOptions(bucket, detail, 0, false)
 }
 
-func (m model) objectDetailLines() []string {
-	return objectDetailLinesWithOptions(m.activeBucket, m.detail, m.width, m.detailWrap)
-}
-
+// objectDetailLinesWithOptions returns object detail rows with optional wrapping.
 func objectDetailLinesWithOptions(bucket string, detail objectDetail, width int, wrap bool) []string {
 	lines := []string{
 		"Size: " + formatBytes(detail.Object.Size),
@@ -546,6 +711,7 @@ func objectDetailLinesWithOptions(bucket string, detail objectDetail, width int,
 	return lines
 }
 
+// numberedPreviewLines prefixes text preview lines with line numbers.
 func numberedPreviewLines(preview string, width int, wrap bool) []string {
 	rawLines := strings.Split(preview, "\n")
 	if len(rawLines) > 1 && rawLines[len(rawLines)-1] == "" {
@@ -577,6 +743,7 @@ func numberedPreviewLines(preview string, width int, wrap bool) []string {
 	return lines
 }
 
+// wrapTextLine splits a line into fixed-width rune chunks.
 func wrapTextLine(line string, width int) []string {
 	runes := []rune(line)
 	if width <= 0 || len(runes) <= width {
@@ -591,6 +758,7 @@ func wrapTextLine(line string, width int) []string {
 	return parts
 }
 
+// s3URI formats a bucket and optional key as an S3 URI.
 func s3URI(bucket, key string) string {
 	if key == "" {
 		return "s3://" + bucket
@@ -598,10 +766,12 @@ func s3URI(bucket, key string) string {
 	return "s3://" + bucket + "/" + strings.TrimPrefix(key, "/")
 }
 
+// objectEntryLabel returns the visible label for an object navigation entry.
 func objectEntryLabel(entry navEntry) string {
 	return entry.Label
 }
 
+// currentObjectPath returns the current tree node path.
 func currentObjectPath(node *treeNode) string {
 	if node == nil {
 		return ""
@@ -609,6 +779,7 @@ func currentObjectPath(node *treeNode) string {
 	return node.Path
 }
 
+// metadataText formats metadata as sorted key-value lines.
 func metadataText(metadata map[string]string) string {
 	if len(metadata) == 0 {
 		return ""
@@ -625,6 +796,7 @@ func metadataText(metadata map[string]string) string {
 	return strings.Join(lines, "\n")
 }
 
+// copyText returns a command that writes OSC52 clipboard text.
 func copyText(label, text string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := fmt.Fprint(os.Stdout, osc52.New(text).String())
@@ -632,117 +804,21 @@ func copyText(label, text string) tea.Cmd {
 	}
 }
 
+// clearStatusAfter returns a command that clears a matching status later.
 func clearStatusAfter(id int) tea.Cmd {
 	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 		return clearStatusMsg{id: id}
 	})
 }
 
+// objectLoadProgressTick returns a command that polls object load progress.
 func objectLoadProgressTick(loadID int) tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return objectLoadProgressMsg{loadID: loadID}
 	})
 }
 
-func (m model) loadBuckets() tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
-		defer cancel()
-		buckets, err := m.service.ListBuckets(ctx)
-		return bucketsLoadedMsg{buckets: buckets, err: err}
-	}
-}
-
-func (m *model) startObjectLoad(bucket, prefix string) tea.Cmd {
-	m.cancelObjectLoad()
-	m.objectLoadID++
-	m.objectLoadCount = 0
-	m.objectLoadInterrupted = false
-	progress := &atomic.Int64{}
-	m.objectLoadProgress = progress
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.objectLoadCancel = cancel
-	loadID := m.objectLoadID
-	return tea.Batch(
-		m.loadObjects(ctx, loadID, bucket, prefix, progress),
-		objectLoadProgressTick(loadID),
-	)
-}
-
-func (m *model) cancelObjectLoad() {
-	if m.objectLoadCancel != nil {
-		m.objectLoadCancel()
-		m.objectLoadCancel = nil
-	}
-}
-
-func (m model) loadObjects(ctx context.Context, loadID int, bucket, prefix string, progress *atomic.Int64) tea.Cmd {
-	return func() tea.Msg {
-		objects, err := m.service.ListObjects(ctx, bucket, prefix, func(count int) {
-			if progress != nil {
-				progress.Store(int64(count))
-			}
-		})
-		return objectsLoadedMsg{loadID: loadID, bucket: bucket, prefix: prefix, objects: objects, err: err}
-	}
-}
-
-func (m model) loadDetail(bucket, key string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
-		defer cancel()
-		detail, err := m.service.InspectObject(ctx, bucket, key, previewBytes)
-		return detailLoadedMsg{detail: detail, err: err}
-	}
-}
-
-func (m *model) mergeObjects(prefix string, objects []objectItem) {
-	if m.objectCache == nil {
-		m.objectCache = map[string]objectItem{}
-	}
-	prefix = normalizePrefix(prefix)
-	for key, object := range m.objectCache {
-		if isDirectChildKey(prefix, key, object.IsPrefix) {
-			delete(m.objectCache, key)
-		}
-	}
-	for _, object := range objects {
-		if object.Key == "" {
-			continue
-		}
-		m.objectCache[object.Key] = object
-	}
-}
-
-func (m *model) rebuildObjectTree() {
-	objects := make([]objectItem, 0, len(m.objectCache))
-	for _, object := range m.objectCache {
-		objects = append(objects, object)
-	}
-	m.root = buildObjectTree(objects)
-}
-
-func (m model) findNode(prefix string) *treeNode {
-	prefix = normalizePrefix(prefix)
-	if prefix == "" {
-		return m.root
-	}
-	if m.root == nil {
-		return nil
-	}
-	current := m.root
-	for _, part := range strings.Split(strings.Trim(prefix, "/"), "/") {
-		if part == "" || current.Children == nil {
-			continue
-		}
-		current = current.Children[part]
-		if current == nil {
-			return nil
-		}
-	}
-	return current
-}
-
+// pathStackForPrefix returns ancestor nodes for a normalized prefix.
 func pathStackForPrefix(root *treeNode, prefix string) []*treeNode {
 	prefix = normalizePrefix(prefix)
 	if root == nil || prefix == "" {
@@ -767,6 +843,7 @@ func pathStackForPrefix(root *treeNode, prefix string) []*treeNode {
 	return stack
 }
 
+// normalizePrefix returns an object prefix without leading slash and with trailing slash.
 func normalizePrefix(prefix string) string {
 	prefix = strings.TrimPrefix(prefix, "/")
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
@@ -775,6 +852,7 @@ func normalizePrefix(prefix string) string {
 	return prefix
 }
 
+// isDirectChildKey reports whether a key is a direct child of a prefix.
 func isDirectChildKey(prefix, key string, isPrefix bool) bool {
 	key = strings.TrimPrefix(key, "/")
 	if !strings.HasPrefix(key, prefix) {
@@ -790,6 +868,7 @@ func isDirectChildKey(prefix, key string, isPrefix bool) bool {
 	return !strings.Contains(rest, "/")
 }
 
+// currentPath returns a slash-prefixed display path for a tree node.
 func currentPath(node *treeNode) string {
 	if node == nil || node.Path == "" {
 		return "/"
@@ -797,6 +876,7 @@ func currentPath(node *treeNode) string {
 	return "/" + strings.TrimPrefix(node.Path, "/")
 }
 
+// clampCursor constrains a cursor to the available item count.
 func clampCursor(cursor, count int) int {
 	if count == 0 {
 		return 0
@@ -804,6 +884,7 @@ func clampCursor(cursor, count int) int {
 	return clamp(cursor, 0, count-1)
 }
 
+// visibleHeight returns how many content rows fit in the terminal.
 func visibleHeight(height int) int {
 	if height <= 8 {
 		return 20
@@ -811,10 +892,7 @@ func visibleHeight(height int) int {
 	return max(1, height-8)
 }
 
-func (m model) maxDetailScroll() int {
-	return max(0, len(m.objectDetailLines())-visibleHeight(m.height))
-}
-
+// wrapCursor moves a cursor with wraparound.
 func wrapCursor(cursor, delta, count int) int {
 	if count == 0 {
 		return 0
@@ -826,6 +904,7 @@ func wrapCursor(cursor, delta, count int) int {
 	return next
 }
 
+// clampListScroll keeps the selected row visible in a scrolling list.
 func clampListScroll(scroll, cursor, count, visible int) int {
 	if count == 0 {
 		return 0
@@ -844,6 +923,7 @@ func clampListScroll(scroll, cursor, count, visible int) int {
 	return scroll
 }
 
+// clamp constrains a value to an inclusive range.
 func clamp(value, low, high int) int {
 	if value < low {
 		return low

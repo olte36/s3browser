@@ -6,9 +6,13 @@ import (
 	"strings"
 )
 
+// defaultS3URL identifies the AWS S3 endpoint used when no storage is specified.
 const defaultS3URL = "https://s3.amazonaws.com"
+
+// defaultGCSURL identifies the Google Cloud Storage endpoint used by the gcp alias.
 const defaultGCSURL = "https://storage.googleapis.com"
 
+// endpointConfig stores a normalized S3-compatible endpoint and its display name.
 type endpointConfig struct {
 	Raw      string
 	Display  string
@@ -16,6 +20,7 @@ type endpointConfig struct {
 	Secure   bool
 }
 
+// parseEndpoint resolves aliases and validates a user-provided storage endpoint.
 func parseEndpoint(raw string) (endpointConfig, error) {
 	display := storageDisplayName(raw)
 	if strings.TrimSpace(raw) == "" {
@@ -53,6 +58,7 @@ func parseEndpoint(raw string) (endpointConfig, error) {
 	}, nil
 }
 
+// storageDisplayName returns the storage label shown in the terminal UI.
 func storageDisplayName(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "aws":
@@ -64,6 +70,7 @@ func storageDisplayName(raw string) string {
 	}
 }
 
+// resolveEndpointAlias maps known storage aliases to concrete endpoint URLs.
 func resolveEndpointAlias(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "aws":
